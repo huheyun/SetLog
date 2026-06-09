@@ -1,52 +1,50 @@
+## 설명
 
+### 요약
+- UIKit 기반으로 SetLogPlus MVP 앱 구조를 구현했습니다.
+- Firebase Authentication, Firestore, Storage를 연동했습니다.
+- 이메일/비밀번호 로그인 및 회원가입 기능을 구현했습니다.
+- 그룹 생성, 초대 코드로 참여, 그룹 설정, 멤버 목록, 그룹 나가기/삭제 흐름을 추가했습니다.
+- 카메라 기반 3초 영상 촬영과 선택한 그룹으로 업로드하는 기능을 구현했습니다.
+- 시간대별 로그 이동, 영상 미리보기 카드, 전체 영상 상세 보기, 소리 제어가 가능한 그룹 피드를 추가했습니다.
+- MVP 소셜 기능을 단순하게 유지하기 위해 채팅 대신 가벼운 이모지 반응 기능으로 대체했습니다.
+- 닉네임 수정, 그룹 목록, 로그아웃을 포함한 프로필 기능을 추가했습니다.
 
-## PR Description
+### 이유
+SetLogPlus는 전체 SNS가 아니라, 가벼운 짧은 영상 일상 기록 앱으로 설계되었습니다. MVP는 작은 그룹 안에서 짧은 로그를 촬영하고, 공유하고, 확인하고, 반응하는 흐름에 집중합니다.
 
-### Summary
-- Built the MVP app structure for SetLogPlus using UIKit.
-- Added Firebase Authentication, Firestore, and Storage integration.
-- Implemented email/password login and sign-up.
-- Added group creation, invite-code joining, group settings, member list, leave/delete flow.
-- Implemented camera-based 3-second video recording and upload to selected groups.
-- Added group feed with hourly log navigation, video preview cards, full video detail view, and sound control.
-- Replaced chat with lightweight emoji reactions for a simpler MVP social interaction.
-- Added profile features including nickname editing, group list, and logout.
+### 주요 변경 사항
+- `Auth/`: 로그인 및 회원가입 화면
+- `Feed/`: 홈/그룹 피드, 그룹 설정, 시간대별 로그 탐색, 반응 기능
+- `Upload/`: 카메라 촬영, 업로드 미리보기, 그룹 선택
+- `VideoDetail/`: 전체 화면에 가까운 영상 재생, 로딩 상태, 소리 토글, 반응 기능
+- `Profile/`: 사용자 프로필, 닉네임 수정, 그룹 목록, 로그아웃
+- `Services/`: Firebase 저장소 계층 및 영상 업로드/오디오 처리 헬퍼
+- `Models/`: 사용자, 그룹, 게시물, 반응, 알림 모델
+- `Shared/`: 재사용 가능한 UI, 테마, 시간, 영상 미리보기 헬퍼
 
-### Why
-SetLogPlus is designed as a lightweight short-video daily logging app, not a full SNS. The MVP focuses on recording, sharing, viewing, and reacting to short logs inside small groups.
-
-### Main Changes
-- `Auth/`: login and sign-up screens.
-- `Feed/`: home/group feed, group settings, hourly log browsing, reactions.
-- `Upload/`: camera recording, upload preview, group selection.
-- `VideoDetail/`: full-screen video playback, loading state, sound toggle, reactions.
-- `Profile/`: user profile, nickname update, group list, logout.
-- `Services/`: Firebase repositories and video upload/audio helpers.
-- `Models/`: user, group, post, reaction, notification models.
-- `Shared/`: reusable UI/theme/time/video-preview helpers.
-
-### Firebase Data Used
+### 사용한 Firebase 데이터
 - `users/{uid}`
 - `groups/{groupID}`
 - `groups/{groupID}/members/{uid}`
 - `posts/{postID}`
 - `posts/{postID}/reactions/{uid}`
-- Firebase Storage path: `videos/{groupID}/{uid}/{fileName}.mov`
+- Firebase Storage 경로: `videos/{groupID}/{uid}/{fileName}.mov`
 
-### Test Notes
-- Verified Xcode build with iOS Simulator target.
-- Manual testing recommended:
-  - Sign up/login
-  - Create and join group by invite code
-  - Record 3-second video
-  - Upload to one or multiple groups
-  - Open group feed and video detail
-  - Toggle sound
-  - Add/remove emoji reaction
-  - Update nickname and logout
+### 테스트 참고 사항
+- iOS Simulator 타깃으로 Xcode 빌드를 확인했습니다.
+- 권장 수동 테스트:
+  - 회원가입/로그인
+  - 그룹 생성 및 초대 코드로 참여
+  - 3초 영상 촬영
+  - 하나 또는 여러 그룹에 업로드
+  - 그룹 피드 및 영상 상세 화면 열기
+  - 소리 토글
+  - 이모지 반응 추가/삭제
+  - 닉네임 수정 및 로그아웃
 
-### Firebase Rules Reminder
-Firestore rules should allow authenticated users to read/write their required MVP documents. For reactions:
+### Firebase 규칙 참고
+Firestore 규칙에서 인증된 사용자가 MVP에 필요한 문서를 읽고 쓸 수 있도록 허용해야 합니다. 반응 기능의 경우:
 
 ```js
 match /posts/{postID}/reactions/{userID} {
