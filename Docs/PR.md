@@ -1,16 +1,4 @@
-# PR Recommendation
 
-## Commit Message
-
-```text
-feat: implement SetLogPlus MVP logging flow
-```
-
-## PR Title
-
-```text
-SetLogPlus MVP: auth, group logs, camera upload, reactions
-```
 
 ## PR Description
 
