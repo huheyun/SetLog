@@ -38,14 +38,16 @@ final class LoginViewController: UIViewController {
         subtitleLabel.textAlignment = .center
         subtitleLabel.numberOfLines = 0
 
-        configureTextField(emailTextField, placeholder: "Email")
+        AppTheme.styleTextField(emailTextField, placeholder: "Email")
         emailTextField.keyboardType = .emailAddress
+        emailTextField.textContentType = .username
         emailTextField.autocapitalizationType = .none
         emailTextField.returnKeyType = .next
         emailTextField.delegate = self
 
-        configureTextField(passwordTextField, placeholder: "Password")
+        AppTheme.styleTextField(passwordTextField, placeholder: "Password")
         passwordTextField.isSecureTextEntry = true
+        passwordTextField.textContentType = .password
         passwordTextField.returnKeyType = .done
         passwordTextField.delegate = self
 
@@ -79,26 +81,8 @@ final class LoginViewController: UIViewController {
             logoImageView.centerXAnchor.constraint(equalTo: logoContainerView.centerXAnchor),
             logoImageView.centerYAnchor.constraint(equalTo: logoContainerView.centerYAnchor),
             logoImageView.widthAnchor.constraint(equalToConstant: 76),
-            logoImageView.heightAnchor.constraint(equalToConstant: 76),
-            emailTextField.heightAnchor.constraint(equalToConstant: 48),
-            passwordTextField.heightAnchor.constraint(equalToConstant: 48)
+            logoImageView.heightAnchor.constraint(equalToConstant: 76)
         ])
-    }
-
-    private func configureTextField(_ textField: UITextField, placeholder: String) {
-        textField.placeholder = placeholder
-        textField.borderStyle = .none
-        textField.backgroundColor = AppTheme.card
-        textField.textColor = AppTheme.text
-        textField.tintColor = AppTheme.neonPink
-        textField.layer.cornerRadius = 14
-        textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
-        textField.leftViewMode = .always
-        textField.attributedPlaceholder = NSAttributedString(
-            string: placeholder,
-            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)]
-        )
-        textField.autocorrectionType = .no
     }
 
     private func setupKeyboardDismissal() {
@@ -118,7 +102,7 @@ final class LoginViewController: UIViewController {
               let password = passwordTextField.text,
               !email.isEmpty,
               !password.isEmpty else {
-            showAlert(message: "이메일과 비밀번호를 입력해주세요.")
+            showAlert(title: "로그인 실패", message: "이메일과 비밀번호를 입력해주세요.")
             return
         }
 
@@ -131,9 +115,9 @@ final class LoginViewController: UIViewController {
 
                 switch result {
                 case .success:
-                    AppRouter.showMainApp(from: self)
+                    AppRouter.showLog(from: self)
                 case .failure(let error):
-                    self.showAlert(message: error.localizedDescription)
+                    self.showAlert(title: "로그인 실패", message: error.localizedDescription)
                 }
             }
         }
@@ -146,12 +130,6 @@ final class LoginViewController: UIViewController {
     private func setLoading(_ isLoading: Bool) {
         loginButton.isEnabled = !isLoading
         loginButton.configuration?.showsActivityIndicator = isLoading
-    }
-
-    private func showAlert(message: String) {
-        let alertController = UIAlertController(title: "로그인 실패", message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
     }
 }
 

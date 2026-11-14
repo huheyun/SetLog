@@ -1,5 +1,4 @@
 import UIKit
-import FirebaseAuth
 
 final class GroupFeedViewController: UIViewController {
     private let group: Group
@@ -125,12 +124,7 @@ final class GroupFeedViewController: UIViewController {
                 DispatchQueue.main.async {
                     switch (memberResult, postResult) {
                     case (.success(let members), .success(let allPosts)):
-                        self.members = members.sorted { first, second in
-                            if first.role == second.role {
-                                return first.displayName < second.displayName
-                            }
-                            return first.role == "owner"
-                        }
+                        self.members = members.sortedForDisplay()
                         self.allPosts = allPosts
                         self.updateAvailableHours()
                         self.updateSelectedPosts()
@@ -146,8 +140,9 @@ final class GroupFeedViewController: UIViewController {
     }
 
     private func renderLoadingState() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeMessageCard(title: "피드를 불러오는 중입니다", message: group.name, systemImageName: "person.2"))
+        contentStackView.replaceArrangedSubviews(with: [
+            InfoCardView(title: "피드를 불러오는 중입니다", message: group.name, systemImageName: "person.2")
+        ])
     }
 
     private func fetchReactionsAndRender() {
@@ -166,8 +161,6 @@ final class GroupFeedViewController: UIViewController {
     }
 
     private func renderMemberAreas() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
         guard !members.isEmpty else {
             renderMessage(title: "멤버가 없습니다", message: "그룹 멤버 정보를 찾을 수 없습니다.")
             return
@@ -178,10 +171,10 @@ final class GroupFeedViewController: UIViewController {
             return
         }
 
-        members.forEach { member in
-            let memberPosts = posts.filter { $0.authorID == member.uid }
-            contentStackView.addArrangedSubview(makeMemberArea(member: member, post: memberPosts.first))
-        }
+        // `posts` is sorted newest first, so each member shows their latest log for the hour.
+        contentStackView.replaceArrangedSubviews(with: members.map { member in
+            makeMemberArea(member: member, post: posts.first { $0.authorID == member.uid })
+        })
     }
 
     private func selectedHourDate() -> Date {
@@ -258,8 +251,9 @@ final class GroupFeedViewController: UIViewController {
     }
 
     private func renderMessage(title: String, message: String) {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeMessageCard(title: title, message: message, systemImageName: "play.rectangle"))
+        contentStackView.replaceArrangedSubviews(with: [
+            InfoCardView(title: title, message: message, systemImageName: "play.rectangle")
+        ])
     }
 
     private func makeMemberArea(member: GroupMember, post: Post?) -> UIView {
@@ -305,24 +299,18 @@ final class GroupFeedViewController: UIViewController {
             ])
         }
 
-        let avatarLabel = UILabel()
-        avatarLabel.text = String(member.displayName.prefix(1))
-        avatarLabel.font = .systemFont(ofSize: 14, weight: .bold)
-        avatarLabel.textColor = .white
-        avatarLabel.textAlignment = .center
-        avatarLabel.backgroundColor = member.role == "owner" ? AppTheme.neonPink : AppTheme.purple
-        avatarLabel.layer.cornerRadius = 15
-        avatarLabel.clipsToBounds = true
-        avatarLabel.translatesAutoresizingMaskIntoConstraints = false
+        let avatarLabel = AppTheme.makeAvatarLabel(
+            text: String(member.displayName.prefix(1)),
+            size: 30,
+            fontSize: 14,
+            color: member.isOwner ? AppTheme.neonPink : AppTheme.purple
+        )
 
         let nameLabel = UILabel()
         nameLabel.text = member.displayName
         nameLabel.font = .preferredFont(forTextStyle: .subheadline)
         nameLabel.textColor = AppTheme.text
-        nameLabel.layer.shadowColor = UIColor.black.cgColor
-        nameLabel.layer.shadowOpacity = post == nil ? 0 : 0.55
-        nameLabel.layer.shadowRadius = 3
-        nameLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
+        AppTheme.applyTextShadow(to: nameLabel, opacity: post == nil ? 0 : 0.55, radius: 3)
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let timeLabel = UILabel()
@@ -330,10 +318,7 @@ final class GroupFeedViewController: UIViewController {
         timeLabel.font = .systemFont(ofSize: 20, weight: .black)
         timeLabel.textColor = post == nil ? UIColor.white.withAlphaComponent(0.12) : .white
         timeLabel.textAlignment = .center
-        timeLabel.layer.shadowColor = UIColor.black.cgColor
-        timeLabel.layer.shadowOpacity = post == nil ? 0 : 0.65
-        timeLabel.layer.shadowRadius = 4
-        timeLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
+        AppTheme.applyTextShadow(to: timeLabel, opacity: post == nil ? 0 : 0.65)
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let statusLabel = UILabel()
@@ -341,10 +326,6 @@ final class GroupFeedViewController: UIViewController {
         statusLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.24)
         statusLabel.textAlignment = .center
-        statusLabel.layer.shadowColor = UIColor.black.cgColor
-        statusLabel.layer.shadowOpacity = 0
-        statusLabel.layer.shadowRadius = 4
-        statusLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let nameStackView = UIStackView(arrangedSubviews: [avatarLabel, nameLabel])
@@ -369,10 +350,7 @@ final class GroupFeedViewController: UIViewController {
         reactionSummaryLabel.font = .systemFont(ofSize: 13, weight: .bold)
         reactionSummaryLabel.textColor = .white
         reactionSummaryLabel.textAlignment = .right
-        reactionSummaryLabel.layer.shadowColor = UIColor.black.cgColor
-        reactionSummaryLabel.layer.shadowOpacity = 0.55
-        reactionSummaryLabel.layer.shadowRadius = 3
-        reactionSummaryLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
+        AppTheme.applyTextShadow(to: reactionSummaryLabel, opacity: 0.55, radius: 3)
         reactionSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
 
         card.addSubview(nameStackView)
@@ -383,9 +361,6 @@ final class GroupFeedViewController: UIViewController {
 
         NSLayoutConstraint.activate([
             card.heightAnchor.constraint(equalToConstant: 142),
-
-            avatarLabel.widthAnchor.constraint(equalToConstant: 30),
-            avatarLabel.heightAnchor.constraint(equalToConstant: 30),
 
             nameStackView.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
             nameStackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
@@ -408,54 +383,6 @@ final class GroupFeedViewController: UIViewController {
         ])
 
         return card
-    }
-
-    private func makeMessageCard(title: String, message: String, systemImageName: String) -> UIView {
-        let card = UIView()
-        AppTheme.roundCard(card, radius: 18)
-
-        let iconImageView = UIImageView(image: UIImage(systemName: systemImageName))
-        iconImageView.tintColor = AppTheme.mint
-        iconImageView.contentMode = .scaleAspectFit
-        iconImageView.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleLabel = UILabel()
-        titleLabel.text = title
-        titleLabel.font = .preferredFont(forTextStyle: .headline)
-        titleLabel.textColor = AppTheme.text
-        titleLabel.textAlignment = .center
-
-        let messageLabel = UILabel()
-        messageLabel.text = message
-        messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-        messageLabel.textColor = AppTheme.secondaryText
-        messageLabel.textAlignment = .center
-        messageLabel.numberOfLines = 0
-
-        let stackView = UIStackView(arrangedSubviews: [iconImageView, titleLabel, messageLabel])
-        stackView.axis = .vertical
-        stackView.alignment = .center
-        stackView.spacing = 12
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-
-        card.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            card.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
-            iconImageView.widthAnchor.constraint(equalToConstant: 42),
-            iconImageView.heightAnchor.constraint(equalToConstant: 42),
-            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
-            stackView.centerYAnchor.constraint(equalTo: card.centerYAnchor)
-        ])
-
-        return card
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
     }
 
     @objc private func openSettings() {
@@ -508,7 +435,9 @@ final class GroupFeedViewController: UIViewController {
             return
         }
 
-        presentReactionPicker(for: post)
+        presentReactionPicker(currentEmoji: myReaction(for: post)?.emoji, from: sender) { [weak self] emoji in
+            self?.toggleReaction(post: post, emoji: emoji)
+        }
     }
 
     @objc private func postLongPressed(_ recognizer: UILongPressGestureRecognizer) {
@@ -551,50 +480,26 @@ final class GroupFeedViewController: UIViewController {
 }
 
 private extension GroupFeedViewController {
-    func presentReactionPicker(for post: Post) {
-        let alertController = UIAlertController(title: "반응 남기기", message: nil, preferredStyle: .actionSheet)
-        let currentEmoji = myReaction(for: post)?.emoji
-
-        ReactionRepository.availableEmojis.forEach { emoji in
-            let title = emoji == currentEmoji ? "\(emoji) 취소" : emoji
-            alertController.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
-                self?.toggleReaction(post: post, emoji: emoji)
-            })
-        }
-
-        alertController.addAction(UIAlertAction(title: "닫기", style: .cancel))
-        present(alertController, animated: true)
-    }
-
     func toggleReaction(post: Post, emoji: String) {
-        let currentEmoji = myReaction(for: post)?.emoji
-        let completion: (Result<Void, Error>) -> Void = { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        reactionRepository.toggleReaction(
+            postID: post.id,
+            emoji: emoji,
+            currentEmoji: myReaction(for: post)?.emoji
+        ) { [weak self] result in
+            guard let self else { return }
 
-                switch result {
-                case .success:
-                    self.fetchReactionsAndRender()
-                case .failure(let error):
-                    ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", in: self.view)
-                }
+            switch result {
+            case .success:
+                self.fetchReactionsAndRender()
+            case .failure(let error):
+                ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", in: self.view)
             }
-        }
-
-        if currentEmoji == emoji {
-            reactionRepository.removeReaction(postID: post.id, completion: completion)
-        } else {
-            reactionRepository.setReaction(postID: post.id, emoji: emoji, completion: completion)
         }
     }
 
     func myReaction(for post: Post?) -> PostReaction? {
-        guard let post,
-              let userID = Auth.auth().currentUser?.uid else {
-            return nil
-        }
-
-        return reactionsByPostID[post.id]?.first { $0.userID == userID }
+        guard let post else { return nil }
+        return reactionsByPostID[post.id]?.reaction(by: AuthService.shared.currentUserID)
     }
 
     func reactionButtonTitle(for post: Post?) -> String {

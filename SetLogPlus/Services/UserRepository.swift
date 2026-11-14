@@ -13,21 +13,13 @@ final class UserRepository {
         ]
 
         db.collection("users").document(user.uid).setData(data) { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
         }
     }
 
     func updateDisplayName(uid: String, displayName: String, completion: @escaping (Result<Void, Error>) -> Void) {
         db.collection("users").document(uid).setData(["displayName": displayName], merge: true) { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
         }
     }
 }

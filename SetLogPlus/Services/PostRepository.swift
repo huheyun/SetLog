@@ -4,6 +4,10 @@ import Foundation
 final class PostRepository {
     private let db = Firestore.firestore()
 
+    private var postsCollection: CollectionReference {
+        db.collection("posts")
+    }
+
     func createPost(_ post: Post, completion: @escaping (Result<Void, Error>) -> Void) {
         let data: [String: Any] = [
             "id": post.id,
@@ -19,17 +23,14 @@ final class PostRepository {
             "createdAt": FieldValue.serverTimestamp()
         ]
 
-        db.collection("posts").document(post.id).setData(data) { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+        postsCollection.document(post.id).setData(data) { error in
+            completion(Result(error: error))
         }
     }
 
+    /// All posts in a group, newest first.
     func fetchPosts(groupID: String, completion: @escaping (Result<[Post], Error>) -> Void) {
-        db.collection("posts")
+        postsCollection
             .whereField("groupID", isEqualTo: groupID)
             .getDocuments { snapshot, error in
                 if let error {
@@ -37,48 +38,37 @@ final class PostRepository {
                     return
                 }
 
-                let posts = snapshot?.documents.compactMap { document -> Post? in
-                    Self.makePost(from: document)
-                } ?? []
-
-                completion(.success(posts))
-            }
-    }
-
-    func fetchPosts(groupID: String, hourKey: String, completion: @escaping (Result<[Post], Error>) -> Void) {
-        db.collection("posts")
-            .whereField("groupID", isEqualTo: groupID)
-            .getDocuments { snapshot, error in
-                if let error {
-                    completion(.failure(error))
-                    return
-                }
-
-                let posts = snapshot?.documents.compactMap { document -> Post? in
-                    Self.makePost(from: document)
-                }.filter { $0.hourKey == hourKey } ?? []
-
+                let posts = (snapshot?.documents.compactMap(Self.makePost(from:)) ?? [])
+                    .sorted(by: Self.isNewer)
                 completion(.success(posts))
             }
     }
 
     func fetchPost(groupID: String, authorID: String, hourKey: String, completion: @escaping (Result<Post?, Error>) -> Void) {
-        db.collection("posts")
+        postsCollection
             .whereField("groupID", isEqualTo: groupID)
+            .whereField("authorID", isEqualTo: authorID)
+            .whereField("hourKey", isEqualTo: hourKey)
+            .limit(to: 1)
             .getDocuments { snapshot, error in
                 if let error {
                     completion(.failure(error))
                     return
                 }
 
-                let post = snapshot?.documents
-                    .compactMap { Self.makePost(from: $0) }
-                    .first { $0.authorID == authorID && $0.hourKey == hourKey }
-                completion(.success(post))
+                completion(.success(snapshot?.documents.first.flatMap(Self.makePost(from:))))
             }
     }
 
-    private static func makePost(from document: QueryDocumentSnapshot) -> Post? {
+    nonisolated private static func isNewer(_ lhs: Post, than rhs: Post) -> Bool {
+        if lhs.hourKey != rhs.hourKey {
+            return lhs.hourKey > rhs.hourKey
+        }
+        // Pending server timestamps (nil) are the most recent writes.
+        return (lhs.createdAt ?? .distantFuture) > (rhs.createdAt ?? .distantFuture)
+    }
+
+    nonisolated private static func makePost(from document: QueryDocumentSnapshot) -> Post? {
         let data = document.data()
 
         guard let groupID = data["groupID"] as? String,
@@ -90,18 +80,6 @@ final class PostRepository {
             return nil
         }
 
-        let durationSeconds: Int
-        if let intDuration = data["durationSeconds"] as? Int {
-            durationSeconds = intDuration
-        } else if let numberDuration = data["durationSeconds"] as? NSNumber {
-            durationSeconds = numberDuration.intValue
-        } else {
-            durationSeconds = 3
-        }
-
-        let hourKey = data["hourKey"] as? String ?? ""
-        let includesAudio = data["includesAudio"] as? Bool ?? true
-
         return Post(
             id: document.documentID,
             groupID: groupID,
@@ -110,9 +88,10 @@ final class PostRepository {
             caption: caption,
             videoURL: videoURL,
             storagePath: storagePath,
-            durationSeconds: durationSeconds,
-            hourKey: hourKey,
-            includesAudio: includesAudio
+            durationSeconds: (data["durationSeconds"] as? NSNumber)?.intValue ?? 3,
+            hourKey: data["hourKey"] as? String ?? "",
+            includesAudio: data["includesAudio"] as? Bool ?? true,
+            createdAt: (data["createdAt"] as? Timestamp)?.dateValue()
         )
     }
 }

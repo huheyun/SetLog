@@ -29,4 +29,46 @@ enum AppTheme {
         view.layer.cornerRadius = radius
         view.clipsToBounds = true
     }
+
+    static func styleTextField(_ textField: UITextField, placeholder: String) {
+        textField.borderStyle = .none
+        textField.backgroundColor = card
+        textField.textColor = text
+        textField.tintColor = neonPink
+        textField.layer.cornerRadius = 14
+        textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
+        textField.leftViewMode = .always
+        textField.attributedPlaceholder = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)]
+        )
+        textField.autocorrectionType = .no
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    }
+
+    /// Circular initial badge used for member avatars.
+    static func makeAvatarLabel(text: String, size: CGFloat, fontSize: CGFloat, color: UIColor) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: fontSize, weight: .black)
+        label.textColor = .white
+        label.textAlignment = .center
+        label.backgroundColor = color
+        label.layer.cornerRadius = size / 2
+        label.clipsToBounds = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            label.widthAnchor.constraint(equalToConstant: size),
+            label.heightAnchor.constraint(equalToConstant: size)
+        ])
+        return label
+    }
+
+    static func applyTextShadow(to label: UILabel, opacity: Float, radius: CGFloat = 4) {
+        label.layer.shadowColor = UIColor.black.cgColor
+        label.layer.shadowOpacity = opacity
+        label.layer.shadowRadius = radius
+        label.layer.shadowOffset = CGSize(width: 0, height: 1)
+    }
 }

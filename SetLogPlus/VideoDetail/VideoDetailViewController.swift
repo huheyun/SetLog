@@ -1,5 +1,4 @@
 import AVKit
-import FirebaseAuth
 import UIKit
 
 final class VideoDetailViewController: UIViewController {
@@ -16,6 +15,7 @@ final class VideoDetailViewController: UIViewController {
     private let loadingIndicatorView = UIActivityIndicatorView(style: .large)
     private let loadingLabel = UILabel()
     private var playerStatusObservation: NSKeyValueObservation?
+    private var playbackEndObserver: NSObjectProtocol?
     private var reactions: [PostReaction] = []
     private var isMuted = false
 
@@ -28,8 +28,14 @@ final class VideoDetailViewController: UIViewController {
         } else {
             player = AVPlayer()
         }
+        player.actionAtItemEnd = .none
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .fullScreen
+    }
+
+    deinit {
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -43,6 +49,7 @@ final class VideoDetailViewController: UIViewController {
         navigationController?.setNavigationBarHidden(true, animated: false)
         setupLayout()
         observePlayerStatus()
+        observePlaybackEnd()
         fetchReactions()
     }
 
@@ -54,7 +61,6 @@ final class VideoDetailViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         player.pause()
-        playerStatusObservation?.invalidate()
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
@@ -79,17 +85,13 @@ final class VideoDetailViewController: UIViewController {
         nameLabel.text = member.displayName
         nameLabel.font = .systemFont(ofSize: 18, weight: .black)
         nameLabel.textColor = .white
-        nameLabel.layer.shadowColor = UIColor.black.cgColor
-        nameLabel.layer.shadowOpacity = 0.6
-        nameLabel.layer.shadowRadius = 5
+        AppTheme.applyTextShadow(to: nameLabel, opacity: 0.6, radius: 5)
 
         let timeLabel = UILabel()
         timeLabel.text = HourSlot.displayText(date: hourDate)
         timeLabel.font = .systemFont(ofSize: 34, weight: .black)
         timeLabel.textColor = .white
-        timeLabel.layer.shadowColor = UIColor.black.cgColor
-        timeLabel.layer.shadowOpacity = 0.6
-        timeLabel.layer.shadowRadius = 5
+        AppTheme.applyTextShadow(to: timeLabel, opacity: 0.6, radius: 5)
 
         let textStackView = UIStackView(arrangedSubviews: [nameLabel, timeLabel])
         textStackView.axis = .vertical
@@ -107,9 +109,7 @@ final class VideoDetailViewController: UIViewController {
         reactionSummaryLabel.font = .systemFont(ofSize: 15, weight: .black)
         reactionSummaryLabel.textColor = .white
         reactionSummaryLabel.textAlignment = .right
-        reactionSummaryLabel.layer.shadowColor = UIColor.black.cgColor
-        reactionSummaryLabel.layer.shadowOpacity = 0.6
-        reactionSummaryLabel.layer.shadowRadius = 4
+        AppTheme.applyTextShadow(to: reactionSummaryLabel, opacity: 0.6)
         reactionSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
 
         loadingContainerView.backgroundColor = UIColor.black.withAlphaComponent(0.42)
@@ -211,6 +211,20 @@ final class VideoDetailViewController: UIViewController {
         }
     }
 
+    /// Loops playback like the feed preview.
+    private func observePlaybackEnd() {
+        guard let item = player.currentItem else { return }
+
+        playbackEndObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.player.seek(to: .zero)
+            self?.player.play()
+        }
+    }
+
     @objc private func soundTapped() {
         isMuted.toggle()
         player.isMuted = isMuted
@@ -218,18 +232,9 @@ final class VideoDetailViewController: UIViewController {
     }
 
     @objc private func reactionTapped() {
-        let alertController = UIAlertController(title: "반응 남기기", message: nil, preferredStyle: .actionSheet)
-        let currentEmoji = myReaction()?.emoji
-
-        ReactionRepository.availableEmojis.forEach { emoji in
-            let title = emoji == currentEmoji ? "\(emoji) 취소" : emoji
-            alertController.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
-                self?.toggleReaction(emoji: emoji)
-            })
+        presentReactionPicker(currentEmoji: myReaction()?.emoji, from: reactionButton) { [weak self] emoji in
+            self?.toggleReaction(emoji: emoji)
         }
-
-        alertController.addAction(UIAlertAction(title: "닫기", style: .cancel))
-        present(alertController, animated: true)
     }
 
     private func updateSoundButton() {
@@ -254,45 +259,32 @@ final class VideoDetailViewController: UIViewController {
     }
 
     private func toggleReaction(emoji: String) {
-        let completion: (Result<Void, Error>) -> Void = { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        reactionRepository.toggleReaction(
+            postID: post.id,
+            emoji: emoji,
+            currentEmoji: myReaction()?.emoji
+        ) { [weak self] result in
+            guard let self else { return }
 
-                switch result {
-                case .success:
-                    self.fetchReactions()
-                case .failure(let error):
-                    ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", in: self.view)
-                }
+            switch result {
+            case .success:
+                self.fetchReactions()
+            case .failure(let error):
+                ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", in: self.view)
             }
-        }
-
-        if myReaction()?.emoji == emoji {
-            reactionRepository.removeReaction(postID: post.id, completion: completion)
-        } else {
-            reactionRepository.setReaction(postID: post.id, emoji: emoji, completion: completion)
         }
     }
 
     private func myReaction() -> PostReaction? {
-        guard let userID = Auth.auth().currentUser?.uid else {
-            return nil
-        }
-
-        return reactions.first { $0.userID == userID }
+        reactions.reaction(by: AuthService.shared.currentUserID)
     }
 
     private func updateReactionButton() {
         var configuration = reactionButton.configuration
-        if let emoji = myReaction()?.emoji {
-            configuration?.image = nil
-            configuration?.title = emoji
-            configuration?.baseForegroundColor = .white
-        } else {
-            configuration?.image = UIImage(systemName: "heart")
-            configuration?.title = nil
-            configuration?.baseForegroundColor = .white
-        }
+        let emoji = myReaction()?.emoji
+        configuration?.image = emoji == nil ? UIImage(systemName: "heart") : nil
+        configuration?.title = emoji
+        configuration?.baseForegroundColor = .white
         reactionButton.configuration = configuration
         reactionSummaryLabel.text = reactionSummaryText()
     }

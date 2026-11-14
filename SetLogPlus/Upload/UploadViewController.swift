@@ -1,5 +1,4 @@
 import AVFoundation
-import FirebaseAuth
 import UIKit
 
 final class UploadViewController: UIViewController {
@@ -113,8 +112,10 @@ final class UploadViewController: UIViewController {
         }
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
+        // TODO: `leftRotateButton` has no action yet.
         let leftRotateButton = IconCircleButton(systemName: "gobackward")
         let rightRotateButton = IconCircleButton(systemName: "arrow.triangle.2.circlepath.camera")
+        rightRotateButton.accessibilityLabel = "카메라 전환"
         rightRotateButton.addTarget(self, action: #selector(switchCameraTapped), for: .touchUpInside)
 
         view.addSubview(previewView)
@@ -258,19 +259,13 @@ final class UploadViewController: UIViewController {
     }
 
     private func configureCamera() {
-        guard preferredCamera(position: .back, zoom: selectedZoom) != nil else {
+        guard let camera = preferredCamera(position: currentCameraPosition, zoom: selectedZoom) else {
             showCameraUnavailableMessage("이 환경에서는 카메라를 사용할 수 없습니다.\n시뮬레이터 대신 실제 iPhone에서 확인해주세요.")
             return
         }
 
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .high
-
-        guard let camera = preferredCamera(position: .back, zoom: selectedZoom) else {
-            captureSession.commitConfiguration()
-            showCameraUnavailableMessage("후면 카메라를 찾을 수 없습니다.")
-            return
-        }
         cameraDevice = camera
 
         do {
@@ -362,16 +357,12 @@ final class UploadViewController: UIViewController {
     private func turnTorchOffIfNeeded() {
         guard let cameraDevice, cameraDevice.hasTorch, isTorchOn else { return }
 
-        do {
-            try cameraDevice.lockForConfiguration()
+        if (try? cameraDevice.lockForConfiguration()) != nil {
             cameraDevice.torchMode = .off
             cameraDevice.unlockForConfiguration()
-            isTorchOn = false
-            updateFlashButton()
-        } catch {
-            isTorchOn = false
-            updateFlashButton()
         }
+        isTorchOn = false
+        updateFlashButton()
     }
 
     private func showCameraUnavailableMessage(_ message: String) {
@@ -380,11 +371,11 @@ final class UploadViewController: UIViewController {
     }
 
     @objc private func zoomTapped(_ sender: UIButton) {
+        guard !movieOutput.isRecording else { return }
+
         let zoom = CGFloat(sender.tag) / 10
-        let previousZoom = selectedZoom
-        selectedZoom = zoom
-        if !switchCameraDeviceIfNeeded(position: currentCameraPosition, zoom: zoom) {
-            selectedZoom = previousZoom
+        if switchCameraDeviceIfNeeded(position: currentCameraPosition, zoom: zoom) {
+            selectedZoom = zoom
         }
         updateZoomButtons()
     }
@@ -416,49 +407,40 @@ final class UploadViewController: UIViewController {
             return true
         }
 
-        var didBeginConfiguration = false
-        let previousInput = videoInput
+        let newInput: AVCaptureDeviceInput
         do {
-            let newInput = try AVCaptureDeviceInput(device: newCamera)
-            captureSession.beginConfiguration()
-            didBeginConfiguration = true
-
-            if let videoInput {
-                captureSession.removeInput(videoInput)
-            }
-
-            if captureSession.canAddInput(newInput) {
-                captureSession.addInput(newInput)
-                videoInput = newInput
-                cameraDevice = newCamera
-                currentCameraPosition = position
-            } else {
-                if let previousInput,
-                   captureSession.canAddInput(previousInput) {
-                    captureSession.addInput(previousInput)
-                }
-                captureSession.commitConfiguration()
-                showAlert(title: "카메라 변경 실패", message: "선택한 카메라 입력을 추가할 수 없습니다.")
-                return false
-            }
-
-            captureSession.commitConfiguration()
-            isTorchOn = false
-            applyZoom(zoom)
-            updateFlashButton()
-            return true
+            newInput = try AVCaptureDeviceInput(device: newCamera)
         } catch {
-            if let previousInput,
-               !captureSession.inputs.contains(where: { $0 === previousInput }),
-               captureSession.canAddInput(previousInput) {
-                captureSession.addInput(previousInput)
-            }
-            if didBeginConfiguration {
-                captureSession.commitConfiguration()
-            }
             showAlert(title: "카메라 변경 실패", message: error.localizedDescription)
             return false
         }
+
+        turnTorchOffIfNeeded()
+
+        captureSession.beginConfiguration()
+        let previousInput = videoInput
+        if let previousInput {
+            captureSession.removeInput(previousInput)
+        }
+
+        guard captureSession.canAddInput(newInput) else {
+            if let previousInput, captureSession.canAddInput(previousInput) {
+                captureSession.addInput(previousInput)
+            }
+            captureSession.commitConfiguration()
+            showAlert(title: "카메라 변경 실패", message: "선택한 카메라 입력을 추가할 수 없습니다.")
+            return false
+        }
+
+        captureSession.addInput(newInput)
+        captureSession.commitConfiguration()
+
+        videoInput = newInput
+        cameraDevice = newCamera
+        currentCameraPosition = position
+        applyZoom(zoom)
+        updateFlashButton()
+        return true
     }
 
     private func updateZoomButtons() {
@@ -490,13 +472,9 @@ final class UploadViewController: UIViewController {
     @objc private func switchCameraTapped() {
         guard !movieOutput.isRecording else { return }
 
-        let previousPosition = currentCameraPosition
-        let previousZoom = selectedZoom
         let nextPosition: AVCaptureDevice.Position = currentCameraPosition == .back ? .front : .back
-        selectedZoom = 1
-        if !switchCameraDeviceIfNeeded(position: nextPosition, zoom: selectedZoom) {
-            currentCameraPosition = previousPosition
-            selectedZoom = previousZoom
+        if switchCameraDeviceIfNeeded(position: nextPosition, zoom: 1) {
+            selectedZoom = 1
         }
         updateZoomButtons()
     }
@@ -560,6 +538,24 @@ final class UploadViewController: UIViewController {
         }
     }
 
+    private func handleRecordingFinished(fileURL: URL, errorMessage: String?) {
+        recordTimer?.invalidate()
+        recordTimer = nil
+        progressTimer?.invalidate()
+        progressTimer = nil
+
+        if let errorMessage {
+            try? FileManager.default.removeItem(at: fileURL)
+            resetCaptureButton()
+            progressTrackView.isHidden = true
+            cameraStatusLabel.isHidden = true
+            showAlert(title: "촬영 실패", message: errorMessage)
+            return
+        }
+
+        finishRecording(fileURL: fileURL)
+    }
+
     private func finishRecording(fileURL: URL) {
         recordedVideoURL = fileURL
         resetCaptureButton()
@@ -570,21 +566,19 @@ final class UploadViewController: UIViewController {
     }
 
     private func showGroupSelection() {
-        guard let user = Auth.auth().currentUser else {
+        guard let userID = AuthService.shared.currentUserID else {
             showAlert(title: "업로드 실패", message: "로그인이 필요합니다.")
             return
         }
 
-        groupRepository.fetchGroups(for: user.uid) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        groupRepository.fetchGroups(for: userID) { [weak self] result in
+            guard let self else { return }
 
-                switch result {
-                case .success(let groups):
-                    self.presentGroupSelection(groups)
-                case .failure(let error):
-                    self.showAlert(title: "그룹 조회 실패", message: error.localizedDescription)
-                }
+            switch result {
+            case .success(let groups):
+                self.presentGroupSelection(groups)
+            case .failure(let error):
+                self.showAlert(title: "그룹 조회 실패", message: error.localizedDescription)
             }
         }
     }
@@ -609,12 +603,6 @@ final class UploadViewController: UIViewController {
         present(selectionViewController, animated: true)
     }
 
-    private func showAlert(title: String, message: String) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
-    }
-
     private func startProgressTimer() {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] _ in
@@ -636,30 +624,26 @@ final class UploadViewController: UIViewController {
         captureButton.backgroundColor = AppTheme.butter
         captureButton.layer.borderColor = AppTheme.neonPink.cgColor
     }
-
 }
 
 extension UploadViewController: AVCaptureFileOutputRecordingDelegate {
-    func fileOutput(
+    nonisolated func fileOutput(
         _ output: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
         from connections: [AVCaptureConnection],
         error: Error?
     ) {
-        DispatchQueue.main.async {
-            self.recordTimer?.invalidate()
-            self.recordTimer = nil
-            self.progressTimer?.invalidate()
-            self.progressTimer = nil
+        // Hitting `maxRecordedDuration` reports an error even though the file is complete.
+        let nsError = error as NSError?
+        let finishedSuccessfully = nsError == nil
+            || nsError?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
+        let errorMessage = nsError?.localizedDescription
 
-            if let error {
-                self.resetCaptureButton()
-                self.progressTrackView.isHidden = true
-                self.showAlert(title: "촬영 실패", message: error.localizedDescription)
-                return
-            }
-
-            self.finishRecording(fileURL: outputFileURL)
+        Task { @MainActor in
+            self.handleRecordingFinished(
+                fileURL: outputFileURL,
+                errorMessage: finishedSuccessfully ? nil : errorMessage
+            )
         }
     }
 }

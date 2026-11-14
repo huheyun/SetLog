@@ -4,15 +4,18 @@ import Foundation
 final class GroupRepository {
     private let db = Firestore.firestore()
 
+    private var groupsCollection: CollectionReference {
+        db.collection("groups")
+    }
+
     func createGroup(name: String, owner: AppUser, completion: @escaping (Result<Group, Error>) -> Void) {
-        let groupRef = db.collection("groups").document()
-        let inviteCode = Self.makeInviteCode()
+        let groupRef = groupsCollection.document()
         let group = Group(
             id: groupRef.documentID,
             name: name,
             ownerID: owner.uid,
             memberIDs: [owner.uid],
-            inviteCode: inviteCode
+            inviteCode: Self.makeInviteCode()
         )
 
         let groupData: [String: Any] = [
@@ -24,29 +27,20 @@ final class GroupRepository {
             "createdAt": FieldValue.serverTimestamp()
         ]
 
-        let memberData: [String: Any] = [
-            "uid": owner.uid,
-            "email": owner.email,
-            "displayName": owner.displayName,
-            "role": "owner",
-            "joinedAt": FieldValue.serverTimestamp()
-        ]
-
         let batch = db.batch()
         batch.setData(groupData, forDocument: groupRef)
-        batch.setData(memberData, forDocument: groupRef.collection("members").document(owner.uid))
+        batch.setData(
+            Self.memberData(for: owner, role: .owner),
+            forDocument: groupRef.collection("members").document(owner.uid)
+        )
 
         batch.commit { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(group))
-            }
+            completion(Result(error: error).map { group })
         }
     }
 
     func fetchGroups(for uid: String, completion: @escaping (Result<[Group], Error>) -> Void) {
-        db.collection("groups")
+        groupsCollection
             .whereField("memberIDs", arrayContains: uid)
             .getDocuments { snapshot, error in
                 if let error {
@@ -54,20 +48,16 @@ final class GroupRepository {
                     return
                 }
 
-                let groups = snapshot?.documents.compactMap { document -> Group? in
-                    Self.makeGroup(from: document)
-                } ?? []
-
+                let groups = snapshot?.documents.compactMap(Self.makeGroup(from:)) ?? []
                 completion(.success(groups))
             }
     }
 
     func updateMemberDisplayName(userID: String, displayName: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        db.collection("groups")
+        let db = db
+        groupsCollection
             .whereField("memberIDs", arrayContains: userID)
-            .getDocuments { [weak self] snapshot, error in
-                guard let self else { return }
-
+            .getDocuments { snapshot, error in
                 if let error {
                     completion(.failure(error))
                     return
@@ -79,38 +69,33 @@ final class GroupRepository {
                     return
                 }
 
-                let batch = self.db.batch()
+                let batch = db.batch()
                 documents.forEach { document in
                     let memberRef = document.reference.collection("members").document(userID)
                     batch.updateData(["displayName": displayName], forDocument: memberRef)
                 }
 
                 batch.commit { error in
-                    if let error {
-                        completion(.failure(error))
-                    } else {
-                        completion(.success(()))
-                    }
+                    completion(Result(error: error))
                 }
             }
     }
 
     func joinGroup(inviteCode: String, user: AppUser, completion: @escaping (Result<Group, Error>) -> Void) {
         let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let db = db
 
-        db.collection("groups")
+        groupsCollection
             .whereField("inviteCode", isEqualTo: normalizedCode)
             .limit(to: 1)
-            .getDocuments { [weak self] snapshot, error in
-                guard let self else { return }
-
+            .getDocuments { snapshot, error in
                 if let error {
                     completion(.failure(error))
                     return
                 }
 
                 guard let document = snapshot?.documents.first,
-                      var group = Self.makeGroup(from: document) else {
+                      let group = Self.makeGroup(from: document) else {
                     completion(.failure(GroupRepositoryError.groupNotFound))
                     return
                 }
@@ -120,38 +105,29 @@ final class GroupRepository {
                     return
                 }
 
-                let groupRef = self.db.collection("groups").document(document.documentID)
-                let memberData: [String: Any] = [
-                    "uid": user.uid,
-                    "email": user.email,
-                    "displayName": user.displayName,
-                    "role": "member",
-                    "joinedAt": FieldValue.serverTimestamp()
-                ]
-
-                let batch = self.db.batch()
+                let groupRef = document.reference
+                let batch = db.batch()
                 batch.updateData(["memberIDs": FieldValue.arrayUnion([user.uid])], forDocument: groupRef)
-                batch.setData(memberData, forDocument: groupRef.collection("members").document(user.uid))
+                batch.setData(
+                    Self.memberData(for: user, role: .member),
+                    forDocument: groupRef.collection("members").document(user.uid)
+                )
 
                 batch.commit { error in
-                    if let error {
-                        completion(.failure(error))
-                    } else {
-                        group = Group(
-                            id: group.id,
-                            name: group.name,
-                            ownerID: group.ownerID,
-                            memberIDs: group.memberIDs + [user.uid],
-                            inviteCode: group.inviteCode
-                        )
-                        completion(.success(group))
-                    }
+                    let joinedGroup = Group(
+                        id: group.id,
+                        name: group.name,
+                        ownerID: group.ownerID,
+                        memberIDs: group.memberIDs + [user.uid],
+                        inviteCode: group.inviteCode
+                    )
+                    completion(Result(error: error).map { joinedGroup })
                 }
             }
     }
 
     func fetchMembers(groupID: String, completion: @escaping (Result<[GroupMember], Error>) -> Void) {
-        db.collection("groups")
+        groupsCollection
             .document(groupID)
             .collection("members")
             .getDocuments { snapshot, error in
@@ -160,19 +136,7 @@ final class GroupRepository {
                     return
                 }
 
-                let members = snapshot?.documents.compactMap { document -> GroupMember? in
-                    let data = document.data()
-
-                    guard let uid = data["uid"] as? String,
-                          let email = data["email"] as? String,
-                          let displayName = data["displayName"] as? String,
-                          let role = data["role"] as? String else {
-                        return nil
-                    }
-
-                    return GroupMember(uid: uid, email: email, displayName: displayName, role: role)
-                } ?? []
-
+                let members = snapshot?.documents.compactMap(Self.makeMember(from:)) ?? []
                 completion(.success(members))
             }
     }
@@ -183,19 +147,14 @@ final class GroupRepository {
             return
         }
 
-        let groupRef = db.collection("groups").document(group.id)
-        let memberRef = groupRef.collection("members").document(userID)
+        let groupRef = groupsCollection.document(group.id)
 
         let batch = db.batch()
         batch.updateData(["memberIDs": FieldValue.arrayRemove([userID])], forDocument: groupRef)
-        batch.deleteDocument(memberRef)
+        batch.deleteDocument(groupRef.collection("members").document(userID))
 
         batch.commit { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
         }
     }
 
@@ -205,7 +164,8 @@ final class GroupRepository {
             return
         }
 
-        let groupRef = db.collection("groups").document(group.id)
+        let groupRef = groupsCollection.document(group.id)
+        let db = db
 
         groupRef.collection("members").getDocuments { snapshot, error in
             if let error {
@@ -213,23 +173,29 @@ final class GroupRepository {
                 return
             }
 
-            let batch = self.db.batch()
-            snapshot?.documents.forEach { document in
-                batch.deleteDocument(document.reference)
-            }
+            let batch = db.batch()
+            snapshot?.documents.forEach { batch.deleteDocument($0.reference) }
             batch.deleteDocument(groupRef)
 
             batch.commit { error in
-                if let error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                }
+                completion(Result(error: error))
             }
         }
     }
 
-    private static func makeGroup(from document: QueryDocumentSnapshot) -> Group? {
+    // MARK: - Mapping
+
+    private static func memberData(for user: AppUser, role: GroupMember.Role) -> [String: Any] {
+        [
+            "uid": user.uid,
+            "email": user.email,
+            "displayName": user.displayName,
+            "role": role.rawValue,
+            "joinedAt": FieldValue.serverTimestamp()
+        ]
+    }
+
+    nonisolated private static func makeGroup(from document: QueryDocumentSnapshot) -> Group? {
         let data = document.data()
 
         guard let name = data["name"] as? String,
@@ -238,15 +204,26 @@ final class GroupRepository {
             return nil
         }
 
-        let inviteCode = data["inviteCode"] as? String ?? "초대 코드 없음"
-
         return Group(
             id: document.documentID,
             name: name,
             ownerID: ownerID,
             memberIDs: memberIDs,
-            inviteCode: inviteCode
+            inviteCode: data["inviteCode"] as? String ?? "초대 코드 없음"
         )
+    }
+
+    nonisolated private static func makeMember(from document: QueryDocumentSnapshot) -> GroupMember? {
+        let data = document.data()
+
+        guard let uid = data["uid"] as? String,
+              let email = data["email"] as? String,
+              let displayName = data["displayName"] as? String,
+              let role = data["role"] as? String else {
+            return nil
+        }
+
+        return GroupMember(uid: uid, email: email, displayName: displayName, role: role)
     }
 
     private static func makeInviteCode() -> String {

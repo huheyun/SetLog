@@ -33,18 +33,21 @@ final class SignUpViewController: UIViewController {
         helperLabel.textAlignment = .center
         helperLabel.numberOfLines = 0
 
-        configureTextField(nameTextField, placeholder: "Display name")
+        AppTheme.styleTextField(nameTextField, placeholder: "Display name")
         nameTextField.returnKeyType = .next
+        nameTextField.textContentType = .nickname
         nameTextField.delegate = self
 
-        configureTextField(emailTextField, placeholder: "Email")
+        AppTheme.styleTextField(emailTextField, placeholder: "Email")
         emailTextField.keyboardType = .emailAddress
+        emailTextField.textContentType = .username
         emailTextField.autocapitalizationType = .none
         emailTextField.returnKeyType = .next
         emailTextField.delegate = self
 
-        configureTextField(passwordTextField, placeholder: "Password")
+        AppTheme.styleTextField(passwordTextField, placeholder: "Password")
         passwordTextField.isSecureTextEntry = true
+        passwordTextField.textContentType = .newPassword
         passwordTextField.returnKeyType = .done
         passwordTextField.delegate = self
 
@@ -72,27 +75,8 @@ final class SignUpViewController: UIViewController {
             logoImageView.centerXAnchor.constraint(equalTo: logoContainerView.centerXAnchor),
             logoImageView.centerYAnchor.constraint(equalTo: logoContainerView.centerYAnchor),
             logoImageView.widthAnchor.constraint(equalToConstant: 68),
-            logoImageView.heightAnchor.constraint(equalToConstant: 68),
-            nameTextField.heightAnchor.constraint(equalToConstant: 48),
-            emailTextField.heightAnchor.constraint(equalToConstant: 48),
-            passwordTextField.heightAnchor.constraint(equalToConstant: 48)
+            logoImageView.heightAnchor.constraint(equalToConstant: 68)
         ])
-    }
-
-    private func configureTextField(_ textField: UITextField, placeholder: String) {
-        textField.placeholder = placeholder
-        textField.borderStyle = .none
-        textField.backgroundColor = AppTheme.card
-        textField.textColor = AppTheme.text
-        textField.tintColor = AppTheme.neonPink
-        textField.layer.cornerRadius = 14
-        textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
-        textField.leftViewMode = .always
-        textField.attributedPlaceholder = NSAttributedString(
-            string: placeholder,
-            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)]
-        )
-        textField.autocorrectionType = .no
     }
 
     private func setupKeyboardDismissal() {
@@ -114,7 +98,7 @@ final class SignUpViewController: UIViewController {
               !displayName.isEmpty,
               !email.isEmpty,
               !password.isEmpty else {
-            showAlert(message: "이름, 이메일, 비밀번호를 모두 입력해주세요.")
+            showAlert(title: "회원가입 실패", message: "이름, 이메일, 비밀번호를 모두 입력해주세요.")
             return
         }
 
@@ -127,9 +111,9 @@ final class SignUpViewController: UIViewController {
 
                 switch result {
                 case .success:
-                    AppRouter.showMainApp(from: self)
+                    AppRouter.showLog(from: self)
                 case .failure(let error):
-                    self.showAlert(message: error.localizedDescription)
+                    self.showAlert(title: "회원가입 실패", message: error.localizedDescription)
                 }
             }
         }
@@ -138,12 +122,6 @@ final class SignUpViewController: UIViewController {
     private func setLoading(_ isLoading: Bool) {
         createButton.isEnabled = !isLoading
         createButton.configuration?.showsActivityIndicator = isLoading
-    }
-
-    private func showAlert(message: String) {
-        let alertController = UIAlertController(title: "회원가입 실패", message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
     }
 }
 

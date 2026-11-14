@@ -13,18 +13,29 @@ final class AuthService {
         Auth.auth().currentUser?.uid
     }
 
+    var isSignedIn: Bool {
+        Auth.auth().currentUser != nil
+    }
+
+    /// The signed-in user as an `AppUser`, with display name falling back to email.
+    var currentAppUser: AppUser? {
+        guard let user = Auth.auth().currentUser else { return nil }
+
+        return AppUser(
+            uid: user.uid,
+            email: user.email ?? "",
+            displayName: user.displayName ?? user.email ?? "사용자"
+        )
+    }
+
     func signIn(email: String, password: String, completion: @escaping (Result<Void, Error>) -> Void) {
         Auth.auth().signIn(withEmail: email, password: password) { _, error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
         }
     }
 
     func signUp(displayName: String, email: String, password: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        Auth.auth().createUser(withEmail: email, password: password) { [weak self] result, error in
+        Auth.auth().createUser(withEmail: email, password: password) { [userRepository] result, error in
             if let error {
                 completion(.failure(error))
                 return
@@ -43,24 +54,14 @@ final class AuthService {
                     return
                 }
 
-                let appUser = AppUser(
-                    uid: firebaseUser.uid,
-                    email: email,
-                    displayName: displayName
-                )
-
-                self?.userRepository.createUserProfile(appUser, completion: completion)
+                let appUser = AppUser(uid: firebaseUser.uid, email: email, displayName: displayName)
+                userRepository.createUserProfile(appUser, completion: completion)
             }
         }
     }
 
     func signOut() -> Result<Void, Error> {
-        do {
-            try Auth.auth().signOut()
-            return .success(())
-        } catch {
-            return .failure(error)
-        }
+        Result { try Auth.auth().signOut() }
     }
 
     func updateDisplayName(_ displayName: String, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -71,16 +72,16 @@ final class AuthService {
 
         let changeRequest = user.createProfileChangeRequest()
         changeRequest.displayName = displayName
-        changeRequest.commitChanges { [weak self] error in
+        changeRequest.commitChanges { [userRepository, groupRepository] error in
             if let error {
                 completion(.failure(error))
                 return
             }
 
-            self?.userRepository.updateDisplayName(uid: user.uid, displayName: displayName) { result in
+            userRepository.updateDisplayName(uid: user.uid, displayName: displayName) { result in
                 switch result {
                 case .success:
-                    self?.groupRepository.updateMemberDisplayName(
+                    groupRepository.updateMemberDisplayName(
                         userID: user.uid,
                         displayName: displayName,
                         completion: completion
@@ -95,11 +96,14 @@ final class AuthService {
 
 enum AuthError: LocalizedError {
     case missingUser
+    case notLoggedIn
 
     var errorDescription: String? {
         switch self {
         case .missingUser:
             return "회원가입은 완료되었지만 사용자 정보를 찾을 수 없습니다."
+        case .notLoggedIn:
+            return "로그인이 필요합니다."
         }
     }
 }

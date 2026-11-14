@@ -7,6 +7,7 @@ final class ReactionRepository {
 
     private let db = Firestore.firestore()
 
+    /// Fetches reactions for each post. Completion is delivered on the main queue.
     func fetchReactions(postIDs: [String], completion: @escaping (Result<[String: [PostReaction]], Error>) -> Void) {
         let uniquePostIDs = Array(Set(postIDs))
         guard !uniquePostIDs.isEmpty else {
@@ -20,6 +21,7 @@ final class ReactionRepository {
 
         uniquePostIDs.forEach { postID in
             group.enter()
+            // Firestore delivers callbacks on the main queue, so these mutations are serialized.
             reactionCollection(postID: postID).getDocuments { snapshot, error in
                 defer { group.leave() }
 
@@ -45,7 +47,7 @@ final class ReactionRepository {
 
     func setReaction(postID: String, emoji: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let user = Auth.auth().currentUser else {
-            completion(.failure(ReactionRepositoryError.notLoggedIn))
+            completion(.failure(AuthError.notLoggedIn))
             return
         }
 
@@ -58,26 +60,32 @@ final class ReactionRepository {
         ]
 
         reactionCollection(postID: postID).document(user.uid).setData(data) { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
         }
     }
 
     func removeReaction(postID: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let userID = Auth.auth().currentUser?.uid else {
-            completion(.failure(ReactionRepositoryError.notLoggedIn))
+            completion(.failure(AuthError.notLoggedIn))
             return
         }
 
         reactionCollection(postID: postID).document(userID).delete { error in
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(Result(error: error))
+        }
+    }
+
+    /// Removes the user's reaction if it matches `emoji`, otherwise sets it.
+    func toggleReaction(
+        postID: String,
+        emoji: String,
+        currentEmoji: String?,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        if currentEmoji == emoji {
+            removeReaction(postID: postID, completion: completion)
+        } else {
+            setReaction(postID: postID, emoji: emoji, completion: completion)
         }
     }
 
@@ -85,7 +93,7 @@ final class ReactionRepository {
         db.collection("posts").document(postID).collection("reactions")
     }
 
-    private static func makeReaction(from document: QueryDocumentSnapshot, postID: String) -> PostReaction? {
+    nonisolated private static func makeReaction(from document: QueryDocumentSnapshot, postID: String) -> PostReaction? {
         let data = document.data()
 
         guard let userID = data["userID"] as? String,
@@ -105,13 +113,9 @@ final class ReactionRepository {
     }
 }
 
-enum ReactionRepositoryError: LocalizedError {
-    case notLoggedIn
-
-    var errorDescription: String? {
-        switch self {
-        case .notLoggedIn:
-            return "로그인이 필요합니다."
-        }
+extension Array where Element == PostReaction {
+    func reaction(by userID: String?) -> PostReaction? {
+        guard let userID else { return nil }
+        return first { $0.userID == userID }
     }
 }

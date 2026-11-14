@@ -1,12 +1,13 @@
 import AudioToolbox
-import FirebaseAuth
 import UIKit
 
 final class FeedViewController: UIViewController {
     private let groupRepository = GroupRepository()
     private let notificationService = NotificationService()
     private var groups: [Group] = []
+    private var hasLoadedGroups = false
     private let contentStackView = UIStackView()
+    private let addButton = IconCircleButton(systemName: "plus")
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -14,7 +15,6 @@ final class FeedViewController: UIViewController {
         view.backgroundColor = AppTheme.background
         AppTheme.applyDarkNavigation(to: navigationController)
         setupLayout()
-        fetchGroups()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -40,7 +40,6 @@ final class FeedViewController: UIViewController {
         logoStackView.spacing = 10
         logoStackView.translatesAutoresizingMaskIntoConstraints = false
 
-        let addButton = IconCircleButton(systemName: "plus")
         addButton.addTarget(self, action: #selector(createGroupTapped), for: .touchUpInside)
 
         let bellButton = IconCircleButton(systemName: "bell")
@@ -101,98 +100,53 @@ final class FeedViewController: UIViewController {
     }
 
     private func fetchGroups() {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            renderEmptyState(message: "현재 로그인된 사용자를 찾을 수 없습니다.")
+        guard let uid = AuthService.shared.currentUserID else {
+            renderInfo(title: "로그인이 필요합니다", message: "현재 로그인된 사용자를 찾을 수 없습니다.")
             return
         }
 
-        renderLoadingState()
+        if !hasLoadedGroups {
+            renderInfo(title: "그룹을 불러오는 중", message: "잠시만 기다려주세요.")
+        }
 
         groupRepository.fetchGroups(for: uid) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                switch result {
-                case .success(let groups):
-                    self.groups = groups
-                    self.renderGroups()
-                case .failure(let error):
-                    self.renderEmptyState(message: "그룹을 불러오지 못했습니다.\n\(error.localizedDescription)")
-                }
+            switch result {
+            case .success(let groups):
+                self.hasLoadedGroups = true
+                self.groups = groups
+                self.renderGroups()
+            case .failure(let error):
+                self.renderInfo(title: "그룹을 불러오지 못했습니다", message: error.localizedDescription)
             }
         }
     }
 
-    private func renderLoadingState() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeInfoCard(title: "그룹을 불러오는 중", message: "잠시만 기다려주세요.", systemImageName: "person.2"))
-    }
-
     private func renderGroups() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
-        if groups.isEmpty {
-            renderEmptyState(message: "아직 그룹이 없습니다.\n오른쪽 위 + 버튼으로 첫 그룹을 만들어보세요.")
+        guard !groups.isEmpty else {
+            renderInfo(title: "그룹이 없습니다", message: "아직 그룹이 없습니다.\n오른쪽 위 + 버튼으로 첫 그룹을 만들어보세요.")
             return
         }
 
-        groups.forEach { group in
-            contentStackView.addArrangedSubview(makeGroupCard(group))
-        }
+        contentStackView.replaceArrangedSubviews(with: groups.map(makeGroupCard))
     }
 
-    private func renderEmptyState(message: String) {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeInfoCard(title: "그룹이 없습니다", message: message, systemImageName: "person.2"))
-    }
-
-    private func makeInfoCard(title: String, message: String, systemImageName: String) -> UIView {
-        let card = UIView()
-        AppTheme.roundCard(card, radius: 22)
-
-        let iconImageView = UIImageView(image: UIImage(systemName: systemImageName))
-        iconImageView.tintColor = AppTheme.mint
-        iconImageView.contentMode = .scaleAspectFit
-        iconImageView.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleLabel = UILabel()
-        titleLabel.text = title
-        titleLabel.font = .preferredFont(forTextStyle: .title2)
-        titleLabel.textColor = AppTheme.text
-        titleLabel.textAlignment = .center
-
-        let messageLabel = UILabel()
-        messageLabel.text = message
-        messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-        messageLabel.textColor = AppTheme.secondaryText
-        messageLabel.textAlignment = .center
-        messageLabel.numberOfLines = 0
-
-        let stackView = UIStackView(arrangedSubviews: [iconImageView, titleLabel, messageLabel])
-        stackView.axis = .vertical
-        stackView.alignment = .center
-        stackView.spacing = 14
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-
-        card.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            card.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
-            iconImageView.widthAnchor.constraint(equalToConstant: 48),
-            iconImageView.heightAnchor.constraint(equalToConstant: 48),
-            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
-            stackView.centerYAnchor.constraint(equalTo: card.centerYAnchor)
+    private func renderInfo(title: String, message: String) {
+        contentStackView.replaceArrangedSubviews(with: [
+            InfoCardView(title: title, message: message, systemImageName: "person.2", titleStyle: .title2)
         ])
-
-        return card
     }
 
     private func makeGroupCard(_ group: Group) -> UIView {
-        let card = UIView()
+        let card = UIControl()
         AppTheme.roundCard(card, radius: 18)
-        card.isUserInteractionEnabled = true
+        card.isAccessibilityElement = true
+        card.accessibilityTraits = .button
         card.accessibilityLabel = "\(group.name) 그룹 열기"
+        card.addAction(UIAction { [weak self] _ in
+            self?.openGroupFeed(group)
+        }, for: .touchUpInside)
 
         let nameLabel = UILabel()
         nameLabel.text = group.name
@@ -207,15 +161,12 @@ final class FeedViewController: UIViewController {
         let textStack = UIStackView(arrangedSubviews: [nameLabel, memberLabel])
         textStack.axis = .vertical
         textStack.spacing = 4
+        textStack.isUserInteractionEnabled = false
         textStack.translatesAutoresizingMaskIntoConstraints = false
 
         let cameraImageView = UIImageView(image: UIImage(systemName: "camera.fill"))
         cameraImageView.tintColor = UIColor(white: 0.45, alpha: 1)
         cameraImageView.translatesAutoresizingMaskIntoConstraints = false
-
-        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(groupCardTapped(_:)))
-        card.addGestureRecognizer(tapGesture)
-        card.tag = groups.firstIndex { $0.id == group.id } ?? 0
 
         card.addSubview(textStack)
         card.addSubview(cameraImageView)
@@ -232,23 +183,8 @@ final class FeedViewController: UIViewController {
         return card
     }
 
-    @objc private func groupCardTapped(_ sender: UITapGestureRecognizer) {
-        guard let card = sender.view,
-              groups.indices.contains(card.tag) else {
-            return
-        }
-
-        navigationController?.pushViewController(GroupFeedViewController(group: groups[card.tag]), animated: true)
-    }
-
-    private func currentAppUser() -> AppUser? {
-        guard let user = Auth.auth().currentUser else { return nil }
-
-        return AppUser(
-            uid: user.uid,
-            email: user.email ?? "",
-            displayName: user.displayName ?? user.email ?? "사용자"
-        )
+    private func openGroupFeed(_ group: Group) {
+        navigationController?.pushViewController(GroupFeedViewController(group: group), animated: true)
     }
 
     @objc private func createGroupTapped() {
@@ -260,11 +196,11 @@ final class FeedViewController: UIViewController {
             self?.showJoinGroupAlert()
         })
         alertController.addAction(UIAlertAction(title: "취소", style: .cancel))
-        present(alertController, animated: true)
+        presentActionSheet(alertController, from: addButton)
     }
 
     private func showCreateGroupAlert() {
-        guard let owner = currentAppUser() else {
+        guard let owner = AuthService.shared.currentAppUser else {
             showAlert(title: "그룹 생성 실패", message: "로그인이 필요합니다.")
             return
         }
@@ -292,7 +228,7 @@ final class FeedViewController: UIViewController {
     }
 
     private func showJoinGroupAlert() {
-        guard let user = currentAppUser() else {
+        guard let user = AuthService.shared.currentAppUser else {
             showAlert(title: "그룹 참여 실패", message: "로그인이 필요합니다.")
             return
         }
@@ -322,39 +258,28 @@ final class FeedViewController: UIViewController {
 
     private func createGroup(name: String, owner: AppUser) {
         groupRepository.createGroup(name: name, owner: owner) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                switch result {
-                case .success:
-                    self.fetchGroups()
-                case .failure(let error):
-                    self.showAlert(title: "그룹 생성 실패", message: error.localizedDescription)
-                }
+            switch result {
+            case .success:
+                self.fetchGroups()
+            case .failure(let error):
+                self.showAlert(title: "그룹 생성 실패", message: error.localizedDescription)
             }
         }
     }
 
     private func joinGroup(inviteCode: String, user: AppUser) {
         groupRepository.joinGroup(inviteCode: inviteCode, user: user) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                switch result {
-                case .success(let group):
-                    self.fetchGroups()
-                    self.navigationController?.pushViewController(GroupFeedViewController(group: group), animated: true)
-                case .failure(let error):
-                    self.showAlert(title: "그룹 참여 실패", message: error.localizedDescription)
-                }
+            switch result {
+            case .success(let group):
+                self.openGroupFeed(group)
+            case .failure(let error):
+                self.showAlert(title: "그룹 참여 실패", message: error.localizedDescription)
             }
         }
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
     }
 
     @objc private func openProfile() {
@@ -368,7 +293,7 @@ final class FeedViewController: UIViewController {
         }
 
         AudioServicesPlaySystemSound(SystemSoundID(1007))
-        notificationService.fetchTodayLogNotifications(groups: groups, excluding: Auth.auth().currentUser?.uid) { [weak self] result in
+        notificationService.fetchTodayLogNotifications(groups: groups, excluding: AuthService.shared.currentUserID) { [weak self] result in
             guard let self else { return }
 
             switch result {
