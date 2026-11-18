@@ -130,6 +130,26 @@ service cloud.firestore {
               && (!existsAfter(groupPath(groupId))
                   || !(request.auth.uid in getAfter(groupPath(groupId)).data.memberIDs)));
       }
+
+      // ---------- groups/{groupId}/messages (group chat) ----------
+      // Messages of deleted groups are removed by the onGroupDeleted Cloud Function.
+      match /messages/{messageId} {
+        allow read: if isGroupMember(groupId);
+
+        allow create: if isGroupMember(groupId)
+          && request.resource.data.keys().hasOnly(['senderID', 'senderName', 'text', 'createdAt'])
+          && request.resource.data.senderID == request.auth.uid
+          && request.resource.data.senderName is string
+          && request.resource.data.senderName.size() > 0
+          && request.resource.data.senderName.size() <= 100
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.createdAt == request.time;
+
+        allow update: if false;
+        allow delete: if signedIn() && resource.data.senderID == request.auth.uid;
+      }
     }
 
     // ---------- posts ----------
@@ -148,15 +168,20 @@ service cloud.firestore {
 
       // The app never updates posts.
       allow update: if false;
-      // Not used by the app, but authors may delete their own posts.
+      // Authors may delete their own posts. The onPostDeleted Cloud Function then removes
+      // the reactions/comments subcollections and the Storage video.
       allow delete: if signedIn() && resource.data.authorID == request.auth.uid;
+
+      function postPath() {
+        return /databases/$(database)/documents/posts/$(postId);
+      }
+
+      function postGroupID() {
+        return get(postPath()).data.groupID;
+      }
 
       // ---------- posts/{postId}/reactions ----------
       match /reactions/{uid} {
-        function postGroupID() {
-          return get(/databases/$(database)/documents/posts/$(postId)).data.groupID;
-        }
-
         allow read: if signedIn() && isGroupMember(postGroupID());
 
         // setData on own reaction doc (create or overwrite).
@@ -167,6 +192,30 @@ service cloud.firestore {
           && isGroupMember(postGroupID());
 
         allow delete: if isSelf(uid);
+      }
+
+      // ---------- posts/{postId}/comments ----------
+      match /comments/{commentId} {
+        allow read: if signedIn() && exists(postPath()) && isGroupMember(postGroupID());
+
+        allow create: if signedIn()
+          && exists(postPath())
+          && isGroupMember(postGroupID())
+          && request.resource.data.authorID == request.auth.uid
+          && request.resource.data.authorName is string
+          && request.resource.data.authorName.size() > 0
+          && request.resource.data.authorName.size() <= 100
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 300
+          && request.resource.data.createdAt is timestamp;
+
+        allow update: if false;
+
+        // Comment author, or the author of the post.
+        allow delete: if signedIn()
+          && (resource.data.authorID == request.auth.uid
+              || (exists(postPath()) && get(postPath()).data.authorID == request.auth.uid));
       }
     }
   }

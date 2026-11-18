@@ -11,6 +11,11 @@ final class GroupFeedViewController: UIViewController {
     private var reactionsByPostID: [String: [PostReaction]] = [:]
     private var availableHourKeys: [String] = []
     private var selectedHourKey: String?
+    /// Start of the day being browsed.
+    private var selectedDay = HourSlot.startOfDay()
+    /// While true, refreshes move the selection to the new "today" after midnight.
+    private var followsToday = true
+    private let dateBar = GroupFeedDateBar()
     private let scrollView = FeedScrollView()
     private let contentStackView = UIStackView()
     private let hourScrollView = UIScrollView()
@@ -21,6 +26,8 @@ final class GroupFeedViewController: UIViewController {
     private var didLoadInitialFeed = false
     /// True once the feed has rendered real content, so refreshes don't flash the loading card.
     private var hasRenderedFeed = false
+    /// True once members/posts loaded successfully at least once.
+    private var hasFeedData = false
 
     private static let createdAtFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -30,6 +37,22 @@ final class GroupFeedViewController: UIViewController {
     }()
 
     private var previewViewsByPostID: [String: VideoPreviewView] = [:]
+
+    // MARK: - Read-only state (for buttons added on top of this screen)
+
+    /// Start of the selected day.
+    var selectedDate: Date { selectedDay }
+
+    /// All posts of the group on the selected day, newest first.
+    var postsForSelectedDay: [Post] {
+        let dayKey = HourSlot.dayKey(for: selectedDay)
+        return allPosts.filter { HourSlot.dayKey(fromHourKey: $0.hourKey) == dayKey }
+    }
+
+    /// Group members, sorted for display.
+    var currentMembers: [GroupMember] { members }
+
+    private var isSelectedDayToday: Bool { HourSlot.isToday(selectedDay) }
 
     init(group: Group) {
         self.group = group
@@ -99,7 +122,25 @@ final class GroupFeedViewController: UIViewController {
             action: #selector(openSettings)
         )
         settingsButton.accessibilityLabel = "그룹 설정"
-        navigationItem.rightBarButtonItem = settingsButton
+
+        let chatButton = UIBarButtonItem(
+            image: UIImage(systemName: "bubble.left.and.bubble.right"),
+            style: .plain,
+            target: self,
+            action: #selector(openChat)
+        )
+        chatButton.accessibilityLabel = "그룹 채팅"
+
+        let recapButton = UIBarButtonItem(
+            image: UIImage(systemName: "film.stack"),
+            style: .plain,
+            target: self,
+            action: #selector(openDayRecap)
+        )
+        recapButton.accessibilityLabel = "하루 영상 만들기"
+
+        // Rightmost first.
+        navigationItem.rightBarButtonItems = [settingsButton, chatButton, recapButton]
     }
 
     private func updateHeaderSubtitle(memberCount: Int) {
@@ -108,6 +149,12 @@ final class GroupFeedViewController: UIViewController {
     }
 
     private func setupLayout() {
+        dateBar.translatesAutoresizingMaskIntoConstraints = false
+        dateBar.onPrevious = { [weak self] in self?.shiftSelectedDay(by: -1) }
+        dateBar.onNext = { [weak self] in self?.shiftSelectedDay(by: 1) }
+        dateBar.onDateTapped = { [weak self] in self?.presentDatePicker() }
+        updateDateBar()
+
         hourScrollView.showsHorizontalScrollIndicator = false
         hourScrollView.alwaysBounceHorizontal = true
         hourScrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -147,6 +194,7 @@ final class GroupFeedViewController: UIViewController {
 
         view.addSubview(scrollView)
         view.addSubview(modeControl)
+        view.addSubview(dateBar)
         view.addSubview(hourScrollView)
         view.addSubview(hourStatusLabel)
         scrollView.addSubview(contentStackView)
@@ -154,7 +202,11 @@ final class GroupFeedViewController: UIViewController {
         let horizontalMargin = AppTheme.Spacing.l
 
         NSLayoutConstraint.activate([
-            hourScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: AppTheme.Spacing.s),
+            dateBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: AppTheme.Spacing.xs),
+            dateBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: AppTheme.Spacing.m),
+            dateBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -AppTheme.Spacing.m),
+
+            hourScrollView.topAnchor.constraint(equalTo: dateBar.bottomAnchor, constant: AppTheme.Spacing.xs),
             hourScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             hourScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hourScrollView.heightAnchor.constraint(equalToConstant: 40),
@@ -206,6 +258,13 @@ final class GroupFeedViewController: UIViewController {
                     case (.success(let members), .success(let allPosts)):
                         self.members = members.sortedForDisplay()
                         self.allPosts = allPosts
+                        self.hasFeedData = true
+                        if self.followsToday, !self.isSelectedDayToday {
+                            // Day rolled over while following today.
+                            self.selectedDay = HourSlot.startOfDay()
+                            self.selectedHourKey = nil
+                        }
+                        self.updateDateBar()
                         allPosts.compactMap { URL(string: $0.videoURL) }.forEach(VideoCache.shared.prefetch)
                         self.updateHeaderSubtitle(memberCount: self.members.count)
                         self.updateAvailableHours()
@@ -270,6 +329,16 @@ final class GroupFeedViewController: UIViewController {
         }
 
         guard selectedHourKey != nil else {
+            guard isSelectedDayToday else {
+                hasRenderedFeed = true
+                renderMessage(
+                    title: "이 날은 기록이 없어요",
+                    message: "\(HourSlot.displayDayText(date: selectedDay))에는 올라온 로그가 없어요.",
+                    systemImageName: "calendar"
+                )
+                return
+            }
+
             renderMessage(
                 title: "오늘 올라온 로그가 없어요",
                 message: "카메라로 첫 로그를 올리면 이곳에 표시됩니다.",
@@ -302,9 +371,9 @@ final class GroupFeedViewController: UIViewController {
         let currentHourKey = HourSlot.currentKey()
         availableHourKeys = Array(
             Set(
-                allPosts
+                postsForSelectedDay
                     .map(\.hourKey)
-                    .filter { HourSlot.isTodayKey($0) && $0 <= currentHourKey }
+                    .filter { $0 <= currentHourKey }
             )
         )
         .sorted()
@@ -324,6 +393,50 @@ final class GroupFeedViewController: UIViewController {
         }
 
         posts = allPosts.filter { $0.hourKey == selectedHourKey }
+    }
+
+    // MARK: - Day navigation
+
+    private func updateDateBar() {
+        dateBar.configure(date: selectedDay, isToday: isSelectedDayToday)
+    }
+
+    private func shiftSelectedDay(by days: Int) {
+        guard let date = HourSlot.calendar.date(byAdding: .day, value: days, to: selectedDay) else { return }
+        selectDay(date)
+    }
+
+    private func selectDay(_ date: Date) {
+        let today = HourSlot.startOfDay()
+        let day = min(HourSlot.startOfDay(date), today)
+        guard day != selectedDay else { return }
+
+        Haptics.selection()
+        selectedDay = day
+        followsToday = day == today
+        selectedHourKey = nil
+        updateDateBar()
+        updateAvailableHours()
+        updateSelectedPosts()
+        renderHourIndicators()
+        updateHourStatusLabel()
+        // Only swap cards once data loaded; otherwise keep the loading/error state.
+        if hasFeedData {
+            UIView.transition(with: contentStackView, duration: 0.2, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                self.renderMemberAreas()
+            }
+        }
+        scrollView.setContentOffset(CGPoint(x: 0, y: -scrollView.adjustedContentInset.top), animated: false)
+    }
+
+    private func presentDatePicker() {
+        Haptics.tap()
+        let dayKeys = Set(allPosts.map { HourSlot.dayKey(fromHourKey: $0.hourKey) })
+        let picker = GroupFeedDatePickerViewController(selectedDate: selectedDay, dayKeysWithPosts: dayKeys) { [weak self] date in
+            self?.selectDay(date)
+        }
+        picker.configureSheet()
+        present(picker, animated: true)
     }
 
     // MARK: - Hour chips
@@ -532,6 +645,10 @@ final class GroupFeedViewController: UIViewController {
         return card
     }
 
+    private var emptySlotText: String {
+        isSelectedDayToday ? "아직 안 올렸어요" : "올리지 않았어요"
+    }
+
     private func makeEmptyCard(member: GroupMember) -> UIView {
         let card = DashedBorderView()
         card.backgroundColor = AppTheme.card
@@ -555,7 +672,7 @@ final class GroupFeedViewController: UIViewController {
             iconView.setContentHuggingPriority(.required, for: .horizontal)
 
             let label = UILabel()
-            label.text = "아직 안 올렸어요"
+            label.text = emptySlotText
             label.font = AppTheme.roundedFont(.subheadline, weight: .semibold)
             label.adjustsFontForContentSizeCategory = true
             label.textColor = AppTheme.tertiaryText
@@ -587,7 +704,7 @@ final class GroupFeedViewController: UIViewController {
 
         if !isOwnCurrentSlot {
             card.isAccessibilityElement = true
-            card.accessibilityLabel = "\(member.displayName), 아직 안 올렸어요"
+            card.accessibilityLabel = "\(member.displayName), \(emptySlotText)"
         }
 
         return card
@@ -743,6 +860,26 @@ final class GroupFeedViewController: UIViewController {
 
     // MARK: - Actions
 
+    @objc private func openChat() {
+        navigationController?.pushViewController(GroupChatViewController(group: group), animated: true)
+    }
+
+    @objc private func openDayRecap() {
+        let posts = postsForSelectedDay
+        guard !posts.isEmpty else {
+            ToastView.show(message: "이 날은 아직 올라온 영상이 없어요", in: view)
+            return
+        }
+
+        let recapViewController = DayRecapViewController(
+            group: group,
+            posts: posts,
+            members: currentMembers,
+            date: selectedDate
+        )
+        present(recapViewController, animated: true)
+    }
+
     @objc private func openSettings() {
         navigationController?.pushViewController(GroupSettingsViewController(group: group), animated: true)
     }
@@ -851,7 +988,7 @@ private extension GroupFeedViewController {
 
     func updateHourStatusLabel() {
         guard let selectedHourKey else {
-            hourStatusLabel.text = "오늘은 아직 조용해요"
+            hourStatusLabel.text = isSelectedDayToday ? "오늘은 아직 조용해요" : "이 날은 기록이 없어요"
             hourStatusLabel.textColor = AppTheme.tertiaryText
             return
         }
@@ -864,7 +1001,8 @@ private extension GroupFeedViewController {
             hourStatusLabel.text = "지금 \(HourSlot.displayText(hourKey: selectedHourKey))\(progressText)"
             hourStatusLabel.textColor = AppTheme.success
         } else {
-            hourStatusLabel.text = "오늘 \(HourSlot.displayText(hourKey: selectedHourKey))\(progressText)"
+            let dayText = isSelectedDayToday ? "오늘" : HourSlot.shortDisplayDayText(date: selectedDay)
+            hourStatusLabel.text = "\(dayText) \(HourSlot.displayText(hourKey: selectedHourKey))\(progressText)"
             hourStatusLabel.textColor = AppTheme.secondaryText
         }
     }
@@ -883,6 +1021,9 @@ extension GroupFeedViewController: UIGestureRecognizerDelegate {
         }
 
         if gestureRecognizer.view === view {
+            if dateBar.bounds.contains(touch.location(in: dateBar)) {
+                return false
+            }
             let locationInStack = touch.location(in: contentStackView)
             if contentStackView.bounds.contains(locationInStack) {
                 return false

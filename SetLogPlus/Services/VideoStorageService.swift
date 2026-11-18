@@ -33,6 +33,30 @@ final class VideoStorageService {
             }
         }
     }
+
+    /// Deletes the object at `storagePath`. A missing object is treated as success.
+    func deleteVideo(storagePath: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !storagePath.isEmpty else {
+            completion(.success(()))
+            return
+        }
+
+        storage.reference(withPath: storagePath).delete { error in
+            if let error, !Self.isObjectNotFound(error) {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
+    nonisolated private static func isObjectNotFound(_ error: Error) -> Bool {
+        if case StorageError.objectNotFound = error {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == StorageErrorDomain && nsError.code == StorageErrorCode.objectNotFound.rawValue
+    }
 }
 
 enum StorageUploadError: LocalizedError {
