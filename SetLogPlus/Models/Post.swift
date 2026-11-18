@@ -11,4 +11,5 @@ struct Post {
     let durationSeconds: Int
     let hourKey: String
     let includesAudio: Bool
+    var createdAt: Date? = nil
 }

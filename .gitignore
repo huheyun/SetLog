@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Build output
+build/
+DerivedData/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+SetLogPlus.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
+
+# Firebase config (contains project API key)
+GoogleService-Info.plist
+
+# Secrets / local env
+*.xcconfig.local
+.env

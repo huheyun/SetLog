@@ -1,12 +1,16 @@
 import FirebaseStorage
 import Foundation
 
+struct VideoUpload {
+    let downloadURL: URL
+    let storagePath: String
+}
+
 final class VideoStorageService {
     private let storage = Storage.storage()
 
-    func uploadVideo(fileURL: URL, groupID: String, ownerUID: String, completion: @escaping (Result<(downloadURL: URL, storagePath: String), Error>) -> Void) {
-        let fileName = "\(UUID().uuidString).mov"
-        let storagePath = "videos/\(groupID)/\(ownerUID)/\(fileName)"
+    func uploadVideo(fileURL: URL, groupID: String, ownerUID: String, completion: @escaping (Result<VideoUpload, Error>) -> Void) {
+        let storagePath = "videos/\(groupID)/\(ownerUID)/\(UUID().uuidString).mov"
         let reference = storage.reference().child(storagePath)
 
         let metadata = StorageMetadata()
@@ -21,15 +25,11 @@ final class VideoStorageService {
             reference.downloadURL { url, urlError in
                 if let urlError {
                     completion(.failure(urlError))
-                    return
-                }
-
-                guard let url else {
+                } else if let url {
+                    completion(.success(VideoUpload(downloadURL: url, storagePath: storagePath)))
+                } else {
                     completion(.failure(StorageUploadError.missingDownloadURL))
-                    return
                 }
-
-                completion(.success((downloadURL: url, storagePath: storagePath)))
             }
         }
     }

@@ -12,7 +12,6 @@ final class ProfileViewController: UIViewController {
         view.backgroundColor = AppTheme.background
         AppTheme.applyDarkNavigation(to: navigationController)
         setupLayout()
-        fetchGroups()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -47,29 +46,30 @@ final class ProfileViewController: UIViewController {
     }
 
     private func fetchGroups() {
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let uid = AuthService.shared.currentUserID else {
             renderProfile()
             return
         }
 
         groupRepository.fetchGroups(for: uid) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                if case .success(let groups) = result {
-                    self.groups = groups
-                }
-
-                self.renderProfile()
+            switch result {
+            case .success(let groups):
+                self.groups = groups
+            case .failure(let error):
+                ToastView.show(message: "그룹을 불러오지 못했어요: \(error.localizedDescription)", in: self.view)
             }
+            self.renderProfile()
         }
     }
 
     private func renderProfile() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeUserCard())
-        contentStackView.addArrangedSubview(makeGroupsCard())
-        contentStackView.addArrangedSubview(makeLogoutButton())
+        contentStackView.replaceArrangedSubviews(with: [
+            makeUserCard(),
+            makeGroupsCard(),
+            makeLogoutButton()
+        ])
     }
 
     private func makeUserCard() -> UIView {
@@ -80,15 +80,12 @@ final class ProfileViewController: UIViewController {
         let displayName = user?.displayName ?? "사용자"
         let email = user?.email ?? "이메일 없음"
 
-        let avatarLabel = UILabel()
-        avatarLabel.text = String(displayName.prefix(1))
-        avatarLabel.font = .systemFont(ofSize: 30, weight: .black)
-        avatarLabel.textColor = .white
-        avatarLabel.textAlignment = .center
-        avatarLabel.backgroundColor = AppTheme.neonPink
-        avatarLabel.layer.cornerRadius = 34
-        avatarLabel.clipsToBounds = true
-        avatarLabel.translatesAutoresizingMaskIntoConstraints = false
+        let avatarLabel = AppTheme.makeAvatarLabel(
+            text: String(displayName.prefix(1)),
+            size: 68,
+            fontSize: 30,
+            color: AppTheme.neonPink
+        )
 
         let nameLabel = UILabel()
         nameLabel.text = displayName
@@ -103,6 +100,7 @@ final class ProfileViewController: UIViewController {
         let editButton = UIButton(type: .system)
         editButton.setImage(UIImage(systemName: "pencil"), for: .normal)
         editButton.tintColor = AppTheme.mint
+        editButton.accessibilityLabel = "닉네임 변경"
         editButton.addTarget(self, action: #selector(editNameTapped), for: .touchUpInside)
         editButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -120,8 +118,6 @@ final class ProfileViewController: UIViewController {
 
             avatarLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
             avatarLabel.centerYAnchor.constraint(equalTo: card.centerYAnchor),
-            avatarLabel.widthAnchor.constraint(equalToConstant: 68),
-            avatarLabel.heightAnchor.constraint(equalToConstant: 68),
 
             textStackView.leadingAnchor.constraint(equalTo: avatarLabel.trailingAnchor, constant: 16),
             textStackView.centerYAnchor.constraint(equalTo: card.centerYAnchor),
@@ -230,15 +226,15 @@ final class ProfileViewController: UIViewController {
                 return
             }
 
-            AuthService.shared.updateDisplayName(displayName) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success:
-                        ToastView.show(message: "닉네임이 변경됐어요", in: self.view)
-                        self.renderProfile()
-                    case .failure(let error):
-                        self.showAlert(title: "닉네임 변경 실패", message: error.localizedDescription)
-                    }
+            AuthService.shared.updateDisplayName(displayName) { [weak self] result in
+                guard let self else { return }
+
+                switch result {
+                case .success:
+                    ToastView.show(message: "닉네임이 변경됐어요", in: self.view)
+                    self.renderProfile()
+                case .failure(let error):
+                    self.showAlert(title: "닉네임 변경 실패", message: error.localizedDescription)
                 }
             }
         })
@@ -261,11 +257,5 @@ final class ProfileViewController: UIViewController {
         case .failure(let error):
             showAlert(title: "로그아웃 실패", message: error.localizedDescription)
         }
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
     }
 }

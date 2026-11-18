@@ -19,6 +19,7 @@ final class UploadGroupSelectionViewController: UIViewController {
     private let uploadActivityIndicator = UIActivityIndicatorView(style: .large)
     private var player: AVPlayer?
     private weak var playerLayer: AVPlayerLayer?
+    private var mutedCopyURL: URL?
 
     init(fileURL: URL, groups: [Group], hourKey: String, durationSeconds: Int) {
         self.fileURL = fileURL
@@ -304,7 +305,25 @@ final class UploadGroupSelectionViewController: UIViewController {
             return
         }
 
-        videoAudioService.makeMutedCopy(from: fileURL, completion: completion)
+        if let mutedCopyURL {
+            completion(.success(mutedCopyURL))
+            return
+        }
+
+        videoAudioService.makeMutedCopy(from: fileURL) { [weak self] result in
+            if case .success(let url) = result {
+                self?.mutedCopyURL = url
+            }
+            completion(result)
+        }
+    }
+
+    /// Recorded clips live in the temp directory; remove them once they're no longer needed.
+    private func removeTemporaryFiles() {
+        [fileURL, mutedCopyURL].compactMap { $0 }.forEach {
+            try? FileManager.default.removeItem(at: $0)
+        }
+        mutedCopyURL = nil
     }
 
     private func upload(uploadFileURL: URL, to selectedGroups: [Group]) {
@@ -327,7 +346,11 @@ final class UploadGroupSelectionViewController: UIViewController {
                     completedCount += 1
                     self.uploadProgressLabel.text = "\(completedCount) / \(selectedGroups.count)"
 
-                    if case .failure(let error) = result {
+                    switch result {
+                    case .success:
+                        // Deselect so a retry after partial failure doesn't post twice.
+                        self.selectedGroupIDs.remove(group.id)
+                    case .failure(let error):
                         uploadErrors.append("\(group.name): \(error.localizedDescription)")
                     }
 
@@ -340,6 +363,8 @@ final class UploadGroupSelectionViewController: UIViewController {
             guard let self else { return }
 
             if uploadErrors.isEmpty {
+                self.player?.pause()
+                self.removeTemporaryFiles()
                 self.uploadActivityIndicator.stopAnimating()
                 self.uploadStatusLabel.text = "업로드 완료"
                 self.uploadProgressLabel.text = selectedGroups.count == 1 ? "그룹 피드에서 바로 확인해볼게요" : "로그 화면에서 바로 확인해볼게요"
@@ -360,8 +385,7 @@ final class UploadGroupSelectionViewController: UIViewController {
                 }
             } else {
                 self.hideUploadOverlay()
-                self.uploadButton.isEnabled = true
-                self.updateUploadButton()
+                self.renderGroups()
                 self.showAlert(title: "일부 업로드 실패", message: uploadErrors.joined(separator: "\n"))
             }
         }
@@ -389,14 +413,8 @@ final class UploadGroupSelectionViewController: UIViewController {
     }
 
     @objc private func closeTapped() {
+        player?.pause()
+        removeTemporaryFiles()
         dismiss(animated: true)
-    }
-
-    private func showAlert(title: String, message: String, completion: (() -> Void)? = nil) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default) { _ in
-            completion?()
-        })
-        present(alertController, animated: true)
     }
 }

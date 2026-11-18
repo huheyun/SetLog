@@ -1,4 +1,3 @@
-import FirebaseAuth
 import UIKit
 
 final class GroupSettingsViewController: UIViewController {
@@ -55,36 +54,30 @@ final class GroupSettingsViewController: UIViewController {
         renderLoadingState()
 
         groupRepository.fetchMembers(groupID: group.id) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                switch result {
-                case .success(let members):
-                    self.members = members.sorted { first, second in
-                        if first.role == second.role {
-                            return first.displayName < second.displayName
-                        }
-                        return first.role == "owner"
-                    }
-                    self.renderSettings()
-                case .failure(let error):
-                    self.showAlert(title: "멤버 조회 실패", message: error.localizedDescription)
-                    self.renderSettings()
-                }
+            switch result {
+            case .success(let members):
+                self.members = members.sortedForDisplay()
+            case .failure(let error):
+                self.showAlert(title: "멤버 조회 실패", message: error.localizedDescription)
             }
+            self.renderSettings()
         }
     }
 
     private func renderLoadingState() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeInfoCard(title: group.name, message: "멤버를 불러오는 중입니다."))
+        contentStackView.replaceArrangedSubviews(with: [
+            InfoCardView(title: group.name, message: "멤버를 불러오는 중입니다.", minimumHeight: 150)
+        ])
     }
 
     private func renderSettings() {
-        contentStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        contentStackView.addArrangedSubview(makeGroupSummaryCard())
-        contentStackView.addArrangedSubview(makeMembersCard())
-        contentStackView.addArrangedSubview(makeActionButton())
+        contentStackView.replaceArrangedSubviews(with: [
+            makeGroupSummaryCard(),
+            makeMembersCard(),
+            makeActionButton()
+        ])
     }
 
     private func makeGroupSummaryCard() -> UIView {
@@ -167,15 +160,12 @@ final class GroupSettingsViewController: UIViewController {
         containerView.backgroundColor = UIColor.white.withAlphaComponent(0.035)
         containerView.layer.cornerRadius = 14
 
-        let avatarLabel = UILabel()
-        avatarLabel.text = member.role == "owner" ? "★" : String(member.displayName.prefix(1))
-        avatarLabel.font = .systemFont(ofSize: 15, weight: .black)
-        avatarLabel.textColor = .white
-        avatarLabel.textAlignment = .center
-        avatarLabel.backgroundColor = member.role == "owner" ? AppTheme.neonPink : AppTheme.purple
-        avatarLabel.layer.cornerRadius = 18
-        avatarLabel.clipsToBounds = true
-        avatarLabel.translatesAutoresizingMaskIntoConstraints = false
+        let avatarLabel = AppTheme.makeAvatarLabel(
+            text: member.isOwner ? "★" : String(member.displayName.prefix(1)),
+            size: 36,
+            fontSize: 15,
+            color: member.isOwner ? AppTheme.neonPink : AppTheme.purple
+        )
 
         let nameLabel = UILabel()
         nameLabel.text = member.displayName
@@ -193,9 +183,9 @@ final class GroupSettingsViewController: UIViewController {
         textStackView.translatesAutoresizingMaskIntoConstraints = false
 
         let roleLabel = UILabel()
-        roleLabel.text = member.role == "owner" ? "그룹장" : "그룹원"
+        roleLabel.text = member.isOwner ? "그룹장" : "그룹원"
         roleLabel.font = .systemFont(ofSize: 12, weight: .bold)
-        roleLabel.textColor = member.role == "owner" ? AppTheme.neonPink : AppTheme.secondaryText
+        roleLabel.textColor = member.isOwner ? AppTheme.neonPink : AppTheme.secondaryText
         roleLabel.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         roleLabel.textAlignment = .center
         roleLabel.layer.cornerRadius = 10
@@ -211,8 +201,6 @@ final class GroupSettingsViewController: UIViewController {
 
             avatarLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 12),
             avatarLabel.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
-            avatarLabel.widthAnchor.constraint(equalToConstant: 36),
-            avatarLabel.heightAnchor.constraint(equalToConstant: 36),
 
             textStackView.leadingAnchor.constraint(equalTo: avatarLabel.trailingAnchor, constant: 12),
             textStackView.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
@@ -225,40 +213,6 @@ final class GroupSettingsViewController: UIViewController {
         ])
 
         return containerView
-    }
-
-    private func makeInfoCard(title: String, message: String) -> UIView {
-        let card = UIView()
-        AppTheme.roundCard(card, radius: 18)
-
-        let titleLabel = UILabel()
-        titleLabel.text = title
-        titleLabel.font = .preferredFont(forTextStyle: .headline)
-        titleLabel.textColor = AppTheme.text
-        titleLabel.textAlignment = .center
-
-        let messageLabel = UILabel()
-        messageLabel.text = message
-        messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-        messageLabel.textColor = AppTheme.secondaryText
-        messageLabel.textAlignment = .center
-        messageLabel.numberOfLines = 0
-
-        let stackView = UIStackView(arrangedSubviews: [titleLabel, messageLabel])
-        stackView.axis = .vertical
-        stackView.spacing = 10
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-
-        card.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            card.heightAnchor.constraint(greaterThanOrEqualToConstant: 150),
-            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 22),
-            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -22),
-            stackView.centerYAnchor.constraint(equalTo: card.centerYAnchor)
-        ])
-
-        return card
     }
 
     private func makeActionButton() -> UIButton {
@@ -286,21 +240,19 @@ final class GroupSettingsViewController: UIViewController {
     }
 
     private func performGroupAction() {
-        guard let userID = Auth.auth().currentUser?.uid else {
+        guard let userID = AuthService.shared.currentUserID else {
             showAlert(title: "실패", message: "로그인이 필요합니다.")
             return
         }
 
         let completion: (Result<Void, Error>) -> Void = { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
 
-                switch result {
-                case .success:
-                    self.navigationController?.popToRootViewController(animated: true)
-                case .failure(let error):
-                    self.showAlert(title: "실패", message: error.localizedDescription)
-                }
+            switch result {
+            case .success:
+                self.navigationController?.popToRootViewController(animated: true)
+            case .failure(let error):
+                self.showAlert(title: "실패", message: error.localizedDescription)
             }
         }
 
@@ -312,12 +264,6 @@ final class GroupSettingsViewController: UIViewController {
     }
 
     private var isCurrentUserOwner: Bool {
-        Auth.auth().currentUser?.uid == group.ownerID
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alertController, animated: true)
+        AuthService.shared.currentUserID == group.ownerID
     }
 }

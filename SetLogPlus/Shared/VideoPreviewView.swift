@@ -1,6 +1,7 @@
 import AVFoundation
 import UIKit
 
+/// Looping, auto-playing video preview. Playback pauses while the view is off-screen.
 final class VideoPreviewView: UIView {
     private let url: URL
     private let player: AVPlayer
@@ -17,7 +18,7 @@ final class VideoPreviewView: UIView {
         player = AVPlayer(url: url)
         self.isMuted = isMuted
         super.init(frame: .zero)
-        setup(isMuted: isMuted)
+        setup()
     }
 
     required init?(coder: NSCoder) {
@@ -38,7 +39,16 @@ final class VideoPreviewView: UIView {
         layer as! AVPlayerLayer
     }
 
-    private func setup(isMuted: Bool) {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
+
+    private func setup() {
         backgroundColor = AppTheme.cardMuted
         setupLoadingView()
 
@@ -48,16 +58,20 @@ final class VideoPreviewView: UIView {
 
         observeCurrentItem()
 
+        // Observe all items and filter, so looping keeps working after `retryTapped` swaps the item.
         endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
+            object: nil,
             queue: .main
-        ) { [weak self] _ in
-            self?.player.seek(to: .zero)
-            self?.player.play()
+        ) { [weak self] notification in
+            guard let self,
+                  let item = notification.object as? AVPlayerItem,
+                  item === self.player.currentItem else {
+                return
+            }
+            self.player.seek(to: .zero)
+            self.player.play()
         }
-
-        player.play()
     }
 
     private func setupLoadingView() {
@@ -97,20 +111,26 @@ final class VideoPreviewView: UIView {
             loadingStackView.isHidden = true
             loadingIndicator.stopAnimating()
             retryButton.isHidden = true
-            player.play()
+            if window != nil {
+                player.play()
+            }
         case .failed:
             loadingIndicator.stopAnimating()
             loadingStackView.isHidden = false
             loadingLabel.text = "영상을 불러오지 못했어요"
             retryButton.isHidden = false
         case .unknown:
-            loadingStackView.isHidden = false
-            loadingLabel.text = "영상 로딩 중"
-            retryButton.isHidden = true
-            loadingIndicator.startAnimating()
+            showLoading()
         @unknown default:
             loadingStackView.isHidden = false
         }
+    }
+
+    private func showLoading() {
+        loadingStackView.isHidden = false
+        loadingLabel.text = "영상 로딩 중"
+        retryButton.isHidden = true
+        loadingIndicator.startAnimating()
     }
 
     private func observeCurrentItem() {
@@ -122,10 +142,7 @@ final class VideoPreviewView: UIView {
     }
 
     @objc private func retryTapped() {
-        loadingLabel.text = "영상 로딩 중"
-        retryButton.isHidden = true
-        loadingStackView.isHidden = false
-        loadingIndicator.startAnimating()
+        showLoading()
         statusObservation = nil
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         player.isMuted = isMuted

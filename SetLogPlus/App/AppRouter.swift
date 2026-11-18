@@ -1,27 +1,17 @@
 import UIKit
 
 enum AppRouter {
-    static func makeLoginNavigationController() -> UINavigationController {
-        UINavigationController(rootViewController: LoginViewController())
-    }
-
-    static func makeMainNavigationController() -> UINavigationController {
-        UINavigationController(rootViewController: FeedViewController())
-    }
-
-    static func showMainApp(from viewController: UIViewController) {
-        replaceRoot(from: viewController, with: makeMainNavigationController())
+    static func makeInitialViewController() -> UIViewController {
+        AuthService.shared.isSignedIn ? makeLogNavigationController() : makeLoginNavigationController()
     }
 
     static func showLog(from viewController: UIViewController) {
-        replaceRoot(from: viewController, with: UINavigationController(rootViewController: FeedViewController()))
+        replaceRoot(from: viewController, with: makeLogNavigationController())
     }
 
     static func showGroupFeed(from viewController: UIViewController, group: Group) {
-        let feedViewController = FeedViewController()
-        let groupFeedViewController = GroupFeedViewController(group: group)
-        let navigationController = UINavigationController(rootViewController: feedViewController)
-        navigationController.setViewControllers([feedViewController, groupFeedViewController], animated: false)
+        let navigationController = makeLogNavigationController()
+        navigationController.pushViewController(GroupFeedViewController(group: group), animated: false)
         replaceRoot(from: viewController, with: navigationController)
     }
 
@@ -31,6 +21,14 @@ enum AppRouter {
 
     static func showLogin(from viewController: UIViewController) {
         replaceRoot(from: viewController, with: makeLoginNavigationController())
+    }
+
+    private static func makeLoginNavigationController() -> UINavigationController {
+        UINavigationController(rootViewController: LoginViewController())
+    }
+
+    private static func makeLogNavigationController() -> UINavigationController {
+        UINavigationController(rootViewController: FeedViewController())
     }
 
     private static func replaceRoot(from viewController: UIViewController, with rootViewController: UIViewController) {
