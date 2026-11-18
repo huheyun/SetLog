@@ -29,6 +29,8 @@ final class GroupFeedViewController: UIViewController {
         return formatter
     }()
 
+    private var previewViewsByPostID: [String: VideoPreviewView] = [:]
+
     init(group: Group) {
         self.group = group
         super.init(nibName: nil, bundle: nil)
@@ -204,6 +206,7 @@ final class GroupFeedViewController: UIViewController {
                     case (.success(let members), .success(let allPosts)):
                         self.members = members.sortedForDisplay()
                         self.allPosts = allPosts
+                        allPosts.compactMap { URL(string: $0.videoURL) }.forEach(VideoCache.shared.prefetch)
                         self.updateHeaderSubtitle(memberCount: self.members.count)
                         self.updateAvailableHours()
                         self.updateSelectedPosts()
@@ -217,6 +220,18 @@ final class GroupFeedViewController: UIViewController {
                 }
             }
         }
+    }
+
+    /// Reuses the preview for a post across re-renders so playback doesn't restart/reload
+    /// when the feed refreshes or the user switches hours and comes back.
+    private func reusablePreviewView(postID: String, url: URL) -> VideoPreviewView {
+        if let existing = previewViewsByPostID[postID] {
+            existing.removeFromSuperview()
+            return existing
+        }
+        let previewView = VideoPreviewView(url: url, isMuted: true)
+        previewViewsByPostID[postID] = previewView
+        return previewView
     }
 
     private func renderLoadingState() {
@@ -452,7 +467,7 @@ final class GroupFeedViewController: UIViewController {
         card.accessibilityIdentifier = post.id
         card.addTarget(self, action: #selector(postCardTapped(_:)), for: .touchUpInside)
 
-        let previewView = VideoPreviewView(url: url, isMuted: true)
+        let previewView = reusablePreviewView(postID: post.id, url: url)
         previewView.translatesAutoresizingMaskIntoConstraints = false
         card.addSubview(previewView)
 

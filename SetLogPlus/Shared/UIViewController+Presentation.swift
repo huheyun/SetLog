@@ -24,16 +24,12 @@ extension UIViewController {
         from sourceView: UIView?,
         onSelect: @escaping (String) -> Void
     ) {
-        let alertController = UIAlertController(title: "반응 남기기", message: nil, preferredStyle: .actionSheet)
-
-        ReactionRepository.availableEmojis.forEach { emoji in
-            let title = emoji == currentEmoji ? "\(emoji) 취소" : emoji
-            alertController.addAction(UIAlertAction(title: title, style: .default) { _ in
-                onSelect(emoji)
-            })
-        }
-
-        alertController.addAction(UIAlertAction(title: "닫기", style: .cancel))
-        presentActionSheet(alertController, from: sourceView)
+        let picker = ReactionPickerViewController(
+            emojis: ReactionRepository.availableEmojis,
+            currentEmoji: currentEmoji,
+            sourceView: sourceView,
+            onSelect: onSelect
+        )
+        present(picker, animated: true)
     }
 }

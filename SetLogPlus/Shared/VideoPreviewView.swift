@@ -18,7 +18,7 @@ final class VideoPreviewView: UIView {
 
     init(url: URL, isMuted: Bool = true) {
         self.url = url
-        player = AVPlayer(url: url)
+        player = AVPlayer(url: VideoCache.shared.playableURL(for: url))
         self.isMuted = isMuted
         super.init(frame: .zero)
         setup()
@@ -123,6 +123,7 @@ final class VideoPreviewView: UIView {
         loadingStackView.addArrangedSubview(retryButton)
 
         addSubview(loadingStackView)
+        loadingStackView.isHidden = true
 
         NSLayoutConstraint.activate([
             loadingStackView.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -151,11 +152,16 @@ final class VideoPreviewView: UIView {
         }
     }
 
+    /// The spinner appears only if loading takes noticeably long, so cached clips don't flash it.
     private func showLoading() {
-        loadingStackView.isHidden = false
         loadingLabel.text = "영상 로딩 중"
         retryButton.isHidden = true
-        loadingIndicator.startAnimating()
+        loadingStackView.isHidden = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.player.currentItem?.status == .unknown else { return }
+            self.loadingStackView.isHidden = false
+            self.loadingIndicator.startAnimating()
+        }
     }
 
     private func observeCurrentItem() {
@@ -169,7 +175,7 @@ final class VideoPreviewView: UIView {
     @objc private func retryTapped() {
         showLoading()
         statusObservation = nil
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        player.replaceCurrentItem(with: AVPlayerItem(url: VideoCache.shared.playableURL(for: url)))
         player.isMuted = isMuted
         observeCurrentItem()
         player.play()
