@@ -112,8 +112,9 @@ final class UploadViewController: UIViewController {
         }
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
-        // TODO: `leftRotateButton` has no action yet.
-        let leftRotateButton = IconCircleButton(systemName: "gobackward")
+        let backButton = IconCircleButton(systemName: "chevron.backward")
+        backButton.accessibilityLabel = "뒤로 가기"
+        backButton.addTarget(self, action: #selector(showLog), for: .touchUpInside)
         let rightRotateButton = IconCircleButton(systemName: "arrow.triangle.2.circlepath.camera")
         rightRotateButton.accessibilityLabel = "카메라 전환"
         rightRotateButton.addTarget(self, action: #selector(switchCameraTapped), for: .touchUpInside)
@@ -130,7 +131,7 @@ final class UploadViewController: UIViewController {
         captureButton.addSubview(captureStopImageView)
         previewView.addSubview(flashButton)
         view.addSubview(modeControl)
-        view.addSubview(leftRotateButton)
+        view.addSubview(backButton)
         view.addSubview(rightRotateButton)
 
         progressFillHeightConstraint = progressFillView.heightAnchor.constraint(equalToConstant: 0)
@@ -186,8 +187,8 @@ final class UploadViewController: UIViewController {
             modeControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             modeControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
 
-            leftRotateButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
-            leftRotateButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            backButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
+            backButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
 
             rightRotateButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
             rightRotateButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24)
