@@ -42,3 +42,20 @@ SetLogPlus는 전체 SNS가 아니라, 가벼운 짧은 영상 일상 기록 앱
   - 소리 토글
   - 이모지 반응 추가/삭제
   - 닉네임 수정 및 로그아웃
+
+## Firebase 서버 설정
+
+서버 측 설정 파일은 저장소 루트에 있습니다: `firebase.json`, `.firebaserc`(기본 프로젝트 `setlogplus`), `firestore.rules`, `storage.rules`, `firestore.indexes.json`, `functions/`.
+
+1. **GoogleService-Info.plist**: Firebase 콘솔 > 프로젝트 설정 > iOS 앱에서 내려받아 `SetLogPlus/` 폴더에 넣습니다. 이 파일은 `.gitignore`에 포함되어 커밋되지 않습니다.
+2. **요금제**: Cloud Functions(2세대) 배포에는 **Blaze(종량제) 요금제**가 필요합니다.
+3. **배포** (Firebase CLI 로그인 후 저장소 루트에서):
+   ```bash
+   cd functions && npm install && cd ..
+   firebase deploy --only functions,firestore:rules,storage
+   ```
+   - `storage.rules`는 그룹 멤버 확인을 위해 Firestore를 교차 조회(`firestore.get`)합니다. 첫 배포 시 Storage 서비스 계정에 권한을 부여할지 묻는 안내가 나오면 승인해야 합니다.
+4. **Cloud Function `onGroupDeleted`**: `groups/{groupId}` 문서가 삭제되면 해당 그룹의 `posts`(및 `reactions` 하위 컬렉션), 남은 `members` 문서, Storage의 `videos/{groupId}/` 파일을 정리합니다.
+5. **API 키 제한 권장**: Google Cloud Console > API 및 서비스 > 사용자 인증 정보에서 iOS API 키를 **iOS 앱 제한(번들 ID `com.hyeon.SetLogPlus`)** 으로 제한하고, 필요한 API만 허용하도록 설정하세요.
+
+> 참고: 초대 코드 조회(`where inviteCode == ...`)를 위해 로그인한 사용자는 모든 그룹 문서를 읽을 수 있습니다. 더 엄격하게 하려면 초대 코드 조회를 Callable Function으로 옮기는 것을 고려하세요.

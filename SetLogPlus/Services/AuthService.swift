@@ -29,8 +29,24 @@ final class AuthService {
     }
 
     func signIn(email: String, password: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        Auth.auth().signIn(withEmail: email, password: password) { _, error in
-            completion(Result(error: error))
+        Auth.auth().signIn(withEmail: email, password: password) { [userRepository] result, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+
+            // Repairs accounts whose Firestore profile was never written (e.g. sign-up interrupted).
+            // Login itself has succeeded, so a failure here is not surfaced.
+            if let user = result?.user {
+                let appUser = AppUser(
+                    uid: user.uid,
+                    email: user.email ?? email,
+                    displayName: user.displayName ?? user.email ?? "사용자"
+                )
+                userRepository.createUserProfileIfNeeded(appUser) { _ in }
+            }
+
+            completion(.success(()))
         }
     }
 
@@ -46,16 +62,31 @@ final class AuthService {
                 return
             }
 
+            // If the profile can't be saved, delete the new account so the user can sign up again
+            // with the same email instead of being left with a half-created account.
+            let rollback: (Error) -> Void = { error in
+                firebaseUser.delete { _ in
+                    completion(.failure(error))
+                }
+            }
+
             let changeRequest = firebaseUser.createProfileChangeRequest()
             changeRequest.displayName = displayName
             changeRequest.commitChanges { profileError in
                 if let profileError {
-                    completion(.failure(profileError))
+                    rollback(profileError)
                     return
                 }
 
                 let appUser = AppUser(uid: firebaseUser.uid, email: email, displayName: displayName)
-                userRepository.createUserProfile(appUser, completion: completion)
+                userRepository.createUserProfile(appUser) { result in
+                    switch result {
+                    case .success:
+                        completion(.success(()))
+                    case .failure(let error):
+                        rollback(error)
+                    }
+                }
             }
         }
     }

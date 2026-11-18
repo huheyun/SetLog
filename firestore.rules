@@ -1,0 +1,173 @@
+rules_version = '2';
+
+// Firestore rules for SetLogPlus.
+// Mirrors what the iOS app does in SetLogPlus/Services/*Repository.swift.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function groupPath(groupId) {
+      return /databases/$(database)/documents/groups/$(groupId);
+    }
+
+    function memberPath(groupId, uid) {
+      return /databases/$(database)/documents/groups/$(groupId)/members/$(uid);
+    }
+
+    // Membership as of *before* the current request.
+    function isGroupMember(groupId) {
+      return signedIn()
+        && exists(groupPath(groupId))
+        && request.auth.uid in get(groupPath(groupId)).data.memberIDs;
+    }
+
+    function isGroupOwner(groupId) {
+      return signedIn()
+        && exists(groupPath(groupId))
+        && get(groupPath(groupId)).data.ownerID == request.auth.uid;
+    }
+
+    function onlyChanges(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if isSelf(uid) && request.resource.data.uid == uid;
+      // displayName is updated with setData(merge: true) -> update.
+      allow update: if isSelf(uid) && request.resource.data.uid == resource.data.uid;
+      allow delete: if false;
+    }
+
+    // ---------- groups ----------
+    match /groups/{groupId} {
+      // TRADE-OFF: any signed-in user can read any group. This is required for
+      // the join flow, where a non-member queries `where inviteCode == CODE limit 1`
+      // (rules cannot restrict a query by the value of an equality filter).
+      // Consequence: a signed-in user could list groups and learn names,
+      // memberIDs and invite codes. To tighten this, move invite-code lookup into
+      // a callable Cloud Function or a separate `inviteCodes/{code}` collection.
+      allow read: if signedIn();
+
+      // Created in one batch together with the owner's member doc.
+      allow create: if signedIn()
+        && request.resource.data.id == groupId
+        && request.resource.data.ownerID == request.auth.uid
+        && request.resource.data.memberIDs == [request.auth.uid]
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.inviteCode is string
+        && request.resource.data.inviteCode.size() == 6
+        && existsAfter(memberPath(groupId, request.auth.uid));
+
+      // join | leave | owner renames the group.
+      allow update: if signedIn() && (isJoin() || isLeave() || isOwnerRename());
+
+      function isJoin() {
+        return onlyChanges(['memberIDs'])
+          && !(request.auth.uid in resource.data.memberIDs)
+          && request.resource.data.memberIDs == resource.data.memberIDs.concat([request.auth.uid])
+          // batched with creation of own member doc
+          && existsAfter(memberPath(groupId, request.auth.uid));
+      }
+
+      function isLeave() {
+        return onlyChanges(['memberIDs'])
+          && request.auth.uid in resource.data.memberIDs
+          && request.auth.uid != resource.data.ownerID
+          && request.resource.data.memberIDs == resource.data.memberIDs.removeAll([request.auth.uid])
+          // batched with deletion of own member doc
+          && !existsAfter(memberPath(groupId, request.auth.uid));
+      }
+
+      function isOwnerRename() {
+        return resource.data.ownerID == request.auth.uid
+          && onlyChanges(['name'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0;
+      }
+
+      allow delete: if signedIn() && resource.data.ownerID == request.auth.uid;
+
+      // ---------- groups/{groupId}/members ----------
+      match /members/{uid} {
+        allow read: if isGroupMember(groupId);
+
+        allow create: if isSelf(uid)
+          && request.resource.data.uid == uid
+          && (
+            // Joining: memberIDs must contain self after the batch.
+            (request.resource.data.role == 'member'
+              && request.auth.uid in getAfter(groupPath(groupId)).data.memberIDs)
+            ||
+            // Group creation: group did not exist before, and after the batch
+            // the caller is its owner.
+            (request.resource.data.role == 'owner'
+              && !exists(groupPath(groupId))
+              && getAfter(groupPath(groupId)).data.ownerID == request.auth.uid)
+          );
+
+        // Only own displayName (propagated when the user renames themselves).
+        allow update: if isSelf(uid) && onlyChanges(['displayName']);
+
+        // - A non-owner member removes their own doc when leaving
+        //   (memberIDs must no longer contain them after the batch).
+        // - The owner may delete any member doc. During group deletion the group
+        //   doc is deleted in the same batch, so we use get() (pre-batch state),
+        //   not getAfter(), for the owner check.
+        // - A user may also remove their own doc from a group that no longer exists.
+        allow delete: if isGroupOwner(groupId)
+          || (isSelf(uid)
+              && (!existsAfter(groupPath(groupId))
+                  || !(request.auth.uid in getAfter(groupPath(groupId)).data.memberIDs)));
+      }
+    }
+
+    // ---------- posts ----------
+    match /posts/{postId} {
+      // Works for `where groupID == X` queries because groupID is constrained
+      // by the query's equality filter.
+      allow read: if isGroupMember(resource.data.groupID);
+
+      allow create: if signedIn()
+        && request.resource.data.id == postId
+        && request.resource.data.authorID == request.auth.uid
+        && isGroupMember(request.resource.data.groupID)
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.matches(
+             '^videos/' + request.resource.data.groupID + '/' + request.auth.uid + '/.+');
+
+      // The app never updates posts.
+      allow update: if false;
+      // Not used by the app, but authors may delete their own posts.
+      allow delete: if signedIn() && resource.data.authorID == request.auth.uid;
+
+      // ---------- posts/{postId}/reactions ----------
+      match /reactions/{uid} {
+        function postGroupID() {
+          return get(/databases/$(database)/documents/posts/$(postId)).data.groupID;
+        }
+
+        allow read: if signedIn() && isGroupMember(postGroupID());
+
+        // setData on own reaction doc (create or overwrite).
+        allow create, update: if isSelf(uid)
+          && request.resource.data.userID == uid
+          && request.resource.data.postID == postId
+          && request.resource.data.emoji is string
+          && isGroupMember(postGroupID());
+
+        allow delete: if isSelf(uid);
+      }
+    }
+  }
+}
