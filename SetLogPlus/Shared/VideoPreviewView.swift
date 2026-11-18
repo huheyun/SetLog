@@ -2,6 +2,9 @@ import AVFoundation
 import UIKit
 
 /// Looping, auto-playing video preview. Playback pauses while the view is off-screen.
+///
+/// The preview is transparent to touches (except its "다시 시도" button), so it can sit inside
+/// a tappable card such as a `PressableControl` without swallowing the tap.
 final class VideoPreviewView: UIView {
     private let url: URL
     private let player: AVPlayer
@@ -37,6 +40,14 @@ final class VideoPreviewView: UIView {
 
     private var playerLayer: AVPlayerLayer {
         layer as! AVPlayerLayer
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hitView = super.hitTest(point, with: event),
+              hitView.isDescendant(of: retryButton) else {
+            return nil
+        }
+        return hitView
     }
 
     override func didMoveToWindow() {
@@ -75,17 +86,31 @@ final class VideoPreviewView: UIView {
     }
 
     private func setupLoadingView() {
-        loadingIndicator.color = .white
+        loadingIndicator.color = AppTheme.secondaryText
         loadingIndicator.startAnimating()
 
         loadingLabel.text = "영상 로딩 중"
-        loadingLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        loadingLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+        loadingLabel.font = AppTheme.roundedFont(.caption1, weight: .semibold)
+        loadingLabel.adjustsFontForContentSizeCategory = true
+        loadingLabel.textColor = AppTheme.tertiaryText
         loadingLabel.textAlignment = .center
 
-        retryButton.setTitle("다시 시도", for: .normal)
-        retryButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
-        retryButton.tintColor = AppTheme.mint
+        var retryConfiguration = UIButton.Configuration.filled()
+        retryConfiguration.title = "다시 시도"
+        retryConfiguration.image = UIImage(systemName: "arrow.clockwise")
+        retryConfiguration.imagePadding = 6
+        retryConfiguration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 11, weight: .bold)
+        retryConfiguration.cornerStyle = .capsule
+        retryConfiguration.baseBackgroundColor = AppTheme.neonPink.withAlphaComponent(0.18)
+        retryConfiguration.baseForegroundColor = AppTheme.neonPink
+        retryConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        retryConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var attributes = attributes
+            attributes.font = AppTheme.roundedFont(.caption1, weight: .bold)
+            return attributes
+        }
+        retryButton.configuration = retryConfiguration
+        retryButton.enablePressAnimation()
         retryButton.isHidden = true
         retryButton.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
 
