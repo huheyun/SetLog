@@ -4,6 +4,9 @@ import UIKit
 final class UploadViewController: UIViewController {
     private let maxRecordSeconds: TimeInterval = 3
     private let captureSession = AVCaptureSession()
+    /// One serial queue for every start/stop (shared across instances) so a stop from the
+    /// previous camera screen can never run after the next screen's start.
+    private static let sessionQueue = DispatchQueue(label: "SetLogPlus.camera.session")
     private let movieOutput = AVCaptureMovieFileOutput()
     private let groupRepository = GroupRepository()
     private var previewLayer: AVCaptureVideoPreviewLayer?
@@ -54,7 +57,16 @@ final class UploadViewController: UIViewController {
         view.backgroundColor = AppTheme.background
         AppTheme.applyDarkNavigation(to: navigationController)
         setupLayout()
+        observeSessionLifecycle()
         requestCameraAccess()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Coming back (e.g. after the upload sheet or another screen) — restart a configured session.
+        if videoInput != nil {
+            startCamera()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -469,9 +481,21 @@ final class UploadViewController: UIViewController {
         hideCameraStatus()
     }
 
+    private func observeSessionLifecycle() {
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(restartCameraIfVisible), name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(restartCameraIfVisible), name: AVCaptureSession.interruptionEndedNotification, object: captureSession)
+        center.addObserver(self, selector: #selector(restartCameraIfVisible), name: AVCaptureSession.runtimeErrorNotification, object: captureSession)
+    }
+
+    @objc private func restartCameraIfVisible() {
+        guard videoInput != nil, viewIfLoaded?.window != nil, presentedViewController == nil else { return }
+        startCamera()
+    }
+
     private func startCamera() {
         let session = captureSession
-        DispatchQueue.global(qos: .userInitiated).async {
+        Self.sessionQueue.async {
             if !session.isRunning {
                 session.startRunning()
             }
@@ -486,7 +510,7 @@ final class UploadViewController: UIViewController {
         turnTorchOffIfNeeded()
 
         let session = captureSession
-        DispatchQueue.global(qos: .userInitiated).async {
+        Self.sessionQueue.async {
             if session.isRunning {
                 session.stopRunning()
             }
@@ -780,7 +804,12 @@ final class UploadViewController: UIViewController {
 
     private func startRecording() {
         guard captureSession.isRunning else {
-            showAlert(title: "촬영 실패", message: "카메라가 아직 준비되지 않았습니다.")
+            if videoInput != nil {
+                startCamera()
+                ToastView.show(message: "카메라를 다시 켜는 중이에요. 잠시 후 눌러주세요.", in: view)
+            } else {
+                showAlert(title: "촬영 실패", message: "카메라가 아직 준비되지 않았습니다.")
+            }
             return
         }
 

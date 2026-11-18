@@ -28,7 +28,7 @@ final class VideoDetailViewController: UIViewController {
         self.member = member
         self.hourDate = hourDate
         if let url = URL(string: post.videoURL) {
-            player = AVPlayer(url: url)
+            player = AVPlayer(url: VideoCache.shared.playableURL(for: url))
         } else {
             player = AVPlayer()
         }
