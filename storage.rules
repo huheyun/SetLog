@@ -1,0 +1,40 @@
+rules_version = '2';
+
+// Storage rules for SetLogPlus.
+// Uploads: videos/{groupId}/{uid}/{UUID}.mov (contentType video/quicktime).
+//
+// Membership is checked with cross-service Firestore lookups (firestore.get).
+// The first deploy asks to grant the Storage service agent read access to
+// Firestore; accept it, otherwise every read/write below is denied.
+// Note: the app plays videos through download URLs (videoURL, which carry a
+// token), and those bypass these read rules.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isGroupMember(groupId) {
+      return signedIn()
+        && request.auth.uid in
+           firestore.get(/databases/(default)/documents/groups/$(groupId)).data.memberIDs;
+    }
+
+    match /videos/{groupId}/{uid}/{fileName} {
+      allow read: if isGroupMember(groupId);
+
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*')
+        && isGroupMember(groupId);
+
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

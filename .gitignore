@@ -26,3 +26,15 @@ GoogleService-Info.plist
 # Secrets / local env
 *.xcconfig.local
 .env
+
+# Firebase / Cloud Functions
+functions/node_modules/
+functions/lib/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+storage-debug.log
+ui-debug.log
+database-debug.log
+pubsub-debug.log
+.firebase/
