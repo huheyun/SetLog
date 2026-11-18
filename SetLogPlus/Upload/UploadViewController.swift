@@ -48,6 +48,18 @@ final class UploadViewController: UIViewController {
     private var isTorchOn = false
     private var selectedZoom: CGFloat = 1
 
+    // Self-timer
+    private static let timerOptions = [0, 3, 10]
+    private static let timerDefaultsKey = "camera.selfTimerSeconds"
+    private let timerButton = IconCircleButton(systemName: "timer", accessibilityLabel: "타이머")
+    private let countdownLabel = UILabel()
+    private var countdownTimer: Timer?
+    private var countdownRemaining = 0
+    private var timerSeconds: Int = {
+        let saved = UserDefaults.standard.integer(forKey: UploadViewController.timerDefaultsKey)
+        return UploadViewController.timerOptions.contains(saved) ? saved : 0
+    }()
+
     private static let captureButtonSize: CGFloat = 84
     private static let captureInnerSize: CGFloat = 68
 
@@ -76,6 +88,7 @@ final class UploadViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        cancelCountdown()
         stopCamera()
     }
 
@@ -119,8 +132,9 @@ final class UploadViewController: UIViewController {
         }
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
-        let backButton = IconCircleButton(systemName: "chevron.backward", accessibilityLabel: "뒤로 가기")
-        backButton.addTarget(self, action: #selector(showLog), for: .touchUpInside)
+        timerButton.addTarget(self, action: #selector(timerTapped), for: .touchUpInside)
+        updateTimerButton()
+        setupCountdownLabel()
         switchCameraButton.addTarget(self, action: #selector(switchCameraTapped), for: .touchUpInside)
 
         view.addSubview(previewView)
@@ -134,7 +148,7 @@ final class UploadViewController: UIViewController {
         previewView.addSubview(zoomContainerView)
         previewView.addSubview(captureButton)
         view.addSubview(modeControl)
-        view.addSubview(backButton)
+        view.addSubview(timerButton)
         view.addSubview(switchCameraButton)
 
         NSLayoutConstraint.activate([
@@ -181,8 +195,8 @@ final class UploadViewController: UIViewController {
             modeControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             modeControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
 
-            backButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
-            backButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: AppTheme.Spacing.xl),
+            timerButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
+            timerButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: AppTheme.Spacing.xl),
 
             switchCameraButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
             switchCameraButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -AppTheme.Spacing.xl)
@@ -589,6 +603,7 @@ final class UploadViewController: UIViewController {
             }
             self.zoomContainerView.alpha = isRecording ? 0.35 : 1
             self.switchCameraButton.alpha = isRecording ? 0.35 : 1
+            self.timerButton.alpha = isRecording ? 0.35 : 1
         }
     }
 
@@ -799,7 +814,130 @@ final class UploadViewController: UIViewController {
 
     @objc private func captureTapped() {
         guard !movieOutput.isRecording else { return }
-        startRecording()
+
+        // Tapping again during the countdown cancels it.
+        if countdownTimer != nil {
+            cancelCountdown()
+            ToastView.show(message: "타이머를 취소했어요", in: view)
+            return
+        }
+
+        if timerSeconds > 0 {
+            startCountdown()
+        } else {
+            startRecording()
+        }
+    }
+
+    // MARK: - Self-timer
+
+    @objc private func timerTapped() {
+        guard !movieOutput.isRecording, countdownTimer == nil else { return }
+        let options = Self.timerOptions
+        let nextIndex = ((options.firstIndex(of: timerSeconds) ?? 0) + 1) % options.count
+        timerSeconds = options[nextIndex]
+        UserDefaults.standard.set(timerSeconds, forKey: Self.timerDefaultsKey)
+        Haptics.selection()
+        updateTimerButton()
+        ToastView.show(message: timerSeconds == 0 ? "타이머 끔" : "타이머 \(timerSeconds)초", in: view)
+    }
+
+    private func updateTimerButton() {
+        guard var configuration = timerButton.configuration else { return }
+        if timerSeconds == 0 {
+            configuration.image = UIImage(systemName: "timer")
+            configuration.title = nil
+            configuration.baseBackgroundColor = AppTheme.cardMuted
+            configuration.baseForegroundColor = AppTheme.text
+        } else {
+            configuration.image = nil
+            configuration.title = "\(timerSeconds)s"
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+                var attributes = attributes
+                attributes.font = AppTheme.roundedFont(.subheadline, weight: .bold)
+                return attributes
+            }
+            configuration.baseBackgroundColor = AppTheme.butter
+            configuration.baseForegroundColor = .black
+        }
+        configuration.contentInsets = .zero
+        timerButton.configuration = configuration
+        timerButton.accessibilityLabel = "타이머"
+        timerButton.accessibilityValue = timerSeconds == 0 ? "꺼짐" : "\(timerSeconds)초"
+    }
+
+    private func setupCountdownLabel() {
+        countdownLabel.font = .systemFont(ofSize: 120, weight: .heavy).rounded
+        countdownLabel.textColor = .white
+        countdownLabel.textAlignment = .center
+        countdownLabel.alpha = 0
+        countdownLabel.isUserInteractionEnabled = false
+        countdownLabel.layer.shadowColor = UIColor.black.cgColor
+        countdownLabel.layer.shadowOpacity = 0.45
+        countdownLabel.layer.shadowRadius = 12
+        countdownLabel.layer.shadowOffset = .zero
+        countdownLabel.translatesAutoresizingMaskIntoConstraints = false
+        previewView.addSubview(countdownLabel)
+        NSLayoutConstraint.activate([
+            countdownLabel.centerXAnchor.constraint(equalTo: previewView.centerXAnchor),
+            countdownLabel.centerYAnchor.constraint(equalTo: previewView.centerYAnchor)
+        ])
+    }
+
+    private func startCountdown() {
+        guard captureSession.isRunning else {
+            // Let startRecording show the "camera not ready" handling.
+            startRecording()
+            return
+        }
+
+        countdownRemaining = timerSeconds
+        setCountdownControlsDimmed(true)
+        showCountdownTick()
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else {
+                    timer.invalidate()
+                    return
+                }
+                self.countdownRemaining -= 1
+                if self.countdownRemaining <= 0 {
+                    self.cancelCountdown()
+                    self.startRecording()
+                } else {
+                    self.showCountdownTick()
+                }
+            }
+        }
+    }
+
+    private func showCountdownTick() {
+        Haptics.tap()
+        countdownLabel.text = "\(countdownRemaining)"
+        countdownLabel.alpha = 1
+        countdownLabel.transform = CGAffineTransform(scaleX: 1.4, y: 1.4)
+        UIView.animate(withDuration: 0.9, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+            self.countdownLabel.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+            self.countdownLabel.alpha = 0.25
+        }
+        UIAccessibility.post(notification: .announcement, argument: "\(countdownRemaining)")
+    }
+
+    private func cancelCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        countdownLabel.layer.removeAllAnimations()
+        countdownLabel.alpha = 0
+        setCountdownControlsDimmed(false)
+    }
+
+    private func setCountdownControlsDimmed(_ dimmed: Bool) {
+        UIView.animate(withDuration: 0.2) {
+            self.timerButton.alpha = dimmed ? 0.35 : 1
+            self.switchCameraButton.alpha = dimmed ? 0.35 : 1
+            self.zoomContainerView.alpha = dimmed ? 0.35 : 1
+        }
     }
 
     private func startRecording() {

@@ -3,6 +3,7 @@ import Foundation
 
 final class PostRepository {
     private let db = Firestore.firestore()
+    private let videoStorageService = VideoStorageService()
 
     private var postsCollection: CollectionReference {
         db.collection("posts")
@@ -58,6 +59,26 @@ final class PostRepository {
 
                 completion(.success(snapshot?.documents.first.flatMap(Self.makePost(from:))))
             }
+    }
+
+    /// Deletes the post document, then its video in Storage.
+    /// Reactions/comments subcollections are cleaned up server-side.
+    /// A Storage failure after the document is gone is logged but not surfaced, since the post no longer exists for users.
+    func deletePost(_ post: Post, completion: @escaping (Result<Void, Error>) -> Void) {
+        let storageService = videoStorageService
+        postsCollection.document(post.id).delete { error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+
+            storageService.deleteVideo(storagePath: post.storagePath) { result in
+                if case .failure(let storageError) = result {
+                    print("[PostRepository] Failed to delete video at \(post.storagePath): \(storageError)")
+                }
+                completion(.success(()))
+            }
+        }
     }
 
     nonisolated private static func isNewer(_ lhs: Post, than rhs: Post) -> Bool {

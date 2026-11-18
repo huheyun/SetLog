@@ -1,4 +1,5 @@
 import AVKit
+import FirebaseFirestore
 import UIKit
 
 final class VideoDetailViewController: UIViewController {
@@ -7,9 +8,15 @@ final class VideoDetailViewController: UIViewController {
     private let hourDate: Date
     private let player: AVPlayer
     private let reactionRepository = ReactionRepository()
+    private let commentRepository = CommentRepository()
+    private let postRepository = PostRepository()
     private let playerViewController = AVPlayerViewController()
     private let soundButton = IconCircleButton(systemName: "speaker.wave.2.fill", accessibilityLabel: "소리 끄기")
     private let reactionButton = IconCircleButton(systemName: "heart", accessibilityLabel: "반응 남기기")
+    private let commentButton = IconCircleButton(systemName: "bubble.right", accessibilityLabel: "댓글")
+    private let commentBadgeLabel = UILabel()
+    private let commentPreviewButton = UIButton(type: .system)
+    private let moreButton = IconCircleButton(systemName: "ellipsis", accessibilityLabel: "게시물 관리")
     private let reactionSummaryPill = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let reactionSummaryLabel = UILabel()
     private let loadingContainerView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
@@ -20,6 +27,9 @@ final class VideoDetailViewController: UIViewController {
     private var playerStatusObservation: NSKeyValueObservation?
     private var playbackEndObserver: NSObjectProtocol?
     private var reactions: [PostReaction] = []
+    private var comments: [PostComment] = []
+    private var commentsListener: ListenerRegistration?
+    private var isDeleting = false
     private var isMuted = false
     private var isPausedByUser = false
 
@@ -37,6 +47,7 @@ final class VideoDetailViewController: UIViewController {
     }
 
     deinit {
+        commentsListener?.remove()
         if let playbackEndObserver {
             NotificationCenter.default.removeObserver(playbackEndObserver)
         }
@@ -59,6 +70,12 @@ final class VideoDetailViewController: UIViewController {
         observePlayerStatus()
         observePlaybackEnd()
         fetchReactions()
+        listenComments()
+    }
+
+    private var isOwnPost: Bool {
+        guard let currentUserID = AuthService.shared.currentUserID else { return false }
+        return post.authorID == currentUserID
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -104,6 +121,10 @@ final class VideoDetailViewController: UIViewController {
         let closeButton = IconCircleButton(systemName: "chevron.backward", accessibilityLabel: "뒤로")
         closeButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+
+        moreButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
+        moreButton.addTarget(self, action: #selector(moreTapped), for: .touchUpInside)
+        moreButton.isHidden = !isOwnPost
 
         let avatarLabel = AppTheme.makeAvatarLabel(
             text: String(member.displayName.prefix(1)),
@@ -161,7 +182,9 @@ final class VideoDetailViewController: UIViewController {
         reactionSummaryPill.isHidden = true
         reactionSummaryPill.contentView.addSubview(reactionSummaryLabel)
 
-        let leadingStackView = UIStackView(arrangedSubviews: [captionLabel, reactionSummaryPill])
+        setupCommentPreviewButton()
+
+        let leadingStackView = UIStackView(arrangedSubviews: [captionLabel, reactionSummaryPill, commentPreviewButton])
         leadingStackView.axis = .vertical
         leadingStackView.alignment = .leading
         leadingStackView.spacing = AppTheme.Spacing.s
@@ -175,7 +198,12 @@ final class VideoDetailViewController: UIViewController {
         reactionButton.addTarget(self, action: #selector(reactionTapped), for: .touchUpInside)
         updateReactionButton()
 
-        let buttonsStackView = UIStackView(arrangedSubviews: [reactionButton, soundButton])
+        commentButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
+        commentButton.addTarget(self, action: #selector(commentsTapped), for: .touchUpInside)
+        setupCommentBadge()
+        updateCommentViews()
+
+        let buttonsStackView = UIStackView(arrangedSubviews: [reactionButton, commentButton, soundButton])
         buttonsStackView.axis = .vertical
         buttonsStackView.spacing = AppTheme.Spacing.m
         buttonsStackView.translatesAutoresizingMaskIntoConstraints = false
@@ -236,6 +264,7 @@ final class VideoDetailViewController: UIViewController {
         view.addSubview(bottomGradientView)
         view.addSubview(closeButton)
         view.addSubview(authorStackView)
+        view.addSubview(moreButton)
         view.addSubview(leadingStackView)
         view.addSubview(buttonsStackView)
         view.addSubview(playbackIconContainer)
@@ -270,7 +299,10 @@ final class VideoDetailViewController: UIViewController {
 
             authorStackView.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: AppTheme.Spacing.m),
             authorStackView.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
-            authorStackView.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -margin),
+            authorStackView.trailingAnchor.constraint(lessThanOrEqualTo: moreButton.leadingAnchor, constant: -AppTheme.Spacing.m),
+
+            moreButton.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
+            moreButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -margin),
 
             buttonsStackView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -margin),
             buttonsStackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -margin),
@@ -316,6 +348,7 @@ final class VideoDetailViewController: UIViewController {
 
         playerStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             DispatchQueue.main.async {
+                guard self?.isDeleting != true else { return }
                 switch item.status {
                 case .readyToPlay:
                     self?.loadingContainerView.isHidden = true
@@ -464,7 +497,197 @@ final class VideoDetailViewController: UIViewController {
     }
 
     @objc private func closeTapped() {
+        guard !isDeleting else { return }
         navigationController?.popViewController(animated: true)
+    }
+
+    // MARK: - Comments
+
+    private func setupCommentBadge() {
+        commentBadgeLabel.font = UIFont.systemFont(ofSize: 11, weight: .bold).rounded
+        commentBadgeLabel.textColor = .black
+        commentBadgeLabel.backgroundColor = AppTheme.neonPink
+        commentBadgeLabel.textAlignment = .center
+        commentBadgeLabel.layer.cornerRadius = 9
+        commentBadgeLabel.layer.cornerCurve = .continuous
+        commentBadgeLabel.clipsToBounds = true
+        commentBadgeLabel.isUserInteractionEnabled = false
+        commentBadgeLabel.isAccessibilityElement = false
+        commentBadgeLabel.isHidden = true
+        commentBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        commentButton.addSubview(commentBadgeLabel)
+
+        NSLayoutConstraint.activate([
+            commentBadgeLabel.heightAnchor.constraint(equalToConstant: 18),
+            commentBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
+            commentBadgeLabel.centerXAnchor.constraint(equalTo: commentButton.trailingAnchor, constant: -6),
+            commentBadgeLabel.centerYAnchor.constraint(equalTo: commentButton.topAnchor, constant: 6)
+        ])
+    }
+
+    private func setupCommentPreviewButton() {
+        var configuration = UIButton.Configuration.plain()
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+        configuration.titleLineBreakMode = .byTruncatingTail
+        configuration.titleAlignment = .leading
+        commentPreviewButton.configuration = configuration
+        commentPreviewButton.contentHorizontalAlignment = .leading
+        commentPreviewButton.isHidden = true
+        commentPreviewButton.addTarget(self, action: #selector(commentsTapped), for: .touchUpInside)
+    }
+
+    private func listenComments() {
+        commentsListener = commentRepository.listenComments(postID: post.id) { [weak self] result in
+            guard let self, !self.isDeleting else { return }
+
+            switch result {
+            case .success(let comments):
+                self.comments = comments
+                self.updateCommentViews()
+            case .failure(let error):
+                // Non-blocking: the sheet surfaces errors when the user opens it.
+                print("[VideoDetail] Failed to listen comments: \(error)")
+            }
+        }
+    }
+
+    private func updateCommentViews() {
+        let count = comments.count
+        commentBadgeLabel.text = count > 99 ? "99+" : "\(count)"
+        commentBadgeLabel.isHidden = count == 0
+        commentButton.accessibilityLabel = count == 0 ? "댓글 남기기" : "댓글 \(count)개 보기"
+
+        guard count > 0 else {
+            commentPreviewButton.isHidden = true
+            return
+        }
+
+        let preview = NSMutableAttributedString(
+            string: "댓글 \(count)",
+            attributes: [
+                .font: AppTheme.roundedFont(.subheadline, weight: .bold),
+                .foregroundColor: UIColor.white
+            ]
+        )
+        if let latest = comments.last {
+            let snippet = latest.text.replacingOccurrences(of: "\n", with: " ")
+            preview.append(NSAttributedString(
+                string: "  \(latest.authorName) \(snippet)",
+                attributes: [
+                    .font: AppTheme.roundedFont(.subheadline, weight: .medium),
+                    .foregroundColor: UIColor.white.withAlphaComponent(0.75)
+                ]
+            ))
+        }
+        commentPreviewButton.configuration?.attributedTitle = AttributedString(preview)
+        commentPreviewButton.accessibilityLabel = "댓글 \(count)개 보기"
+        commentPreviewButton.isHidden = false
+    }
+
+    @objc private func commentsTapped() {
+        guard !isDeleting, presentedViewController == nil else { return }
+        let commentsViewController = CommentsViewController(post: post, initialComments: comments)
+        present(commentsViewController, animated: true)
+    }
+
+    // MARK: - Own post management
+
+    @objc private func moreTapped() {
+        guard isOwnPost, !isDeleting else { return }
+
+        let actionSheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        // Retaking only makes sense for the current hour; an older slot can't be refilled.
+        if post.hourKey == HourSlot.currentKey() {
+            actionSheet.addAction(UIAlertAction(title: "다시 찍기", style: .default) { [weak self] _ in
+                self?.confirmRetake()
+            })
+        }
+        actionSheet.addAction(UIAlertAction(title: "삭제", style: .destructive) { [weak self] _ in
+            self?.confirmDelete()
+        })
+        actionSheet.addAction(UIAlertAction(title: "취소", style: .cancel))
+        presentActionSheet(actionSheet, from: moreButton)
+    }
+
+    private func confirmRetake() {
+        let alert = UIAlertController(
+            title: "다시 찍을까요?",
+            message: "지금 게시물과 반응, 댓글이 삭제되고 카메라가 열려요.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "취소", style: .cancel))
+        alert.addAction(UIAlertAction(title: "다시 찍기", style: .destructive) { [weak self] _ in
+            self?.deletePost { viewController in
+                AppRouter.showCamera(from: viewController)
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func confirmDelete() {
+        let alert = UIAlertController(
+            title: "게시물을 삭제할까요?",
+            message: "삭제한 영상과 반응, 댓글은 되돌릴 수 없어요.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "취소", style: .cancel))
+        alert.addAction(UIAlertAction(title: "삭제", style: .destructive) { [weak self] _ in
+            self?.deletePost { viewController in
+                viewController.popAfterDeletion()
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func deletePost(onSuccess: @escaping (VideoDetailViewController) -> Void) {
+        guard !isDeleting else { return }
+        setDeleting(true)
+
+        postRepository.deletePost(post) { [weak self] result in
+            guard let self else { return }
+
+            switch result {
+            case .success:
+                self.commentsListener?.remove()
+                self.commentsListener = nil
+                self.player.pause()
+                onSuccess(self)
+            case .failure(let error):
+                self.setDeleting(false)
+                ToastView.show(message: "삭제하지 못했어요: \(error.localizedDescription)", style: .error, in: self.view)
+            }
+        }
+    }
+
+    private func setDeleting(_ deleting: Bool) {
+        isDeleting = deleting
+        view.isUserInteractionEnabled = !deleting
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = !deleting
+
+        if deleting {
+            loadingLabel.text = "삭제하는 중"
+            loadingIndicatorView.startAnimating()
+            loadingContainerView.isHidden = false
+        } else {
+            let isReady = player.currentItem?.status == .readyToPlay
+            loadingContainerView.isHidden = isReady
+            if isReady {
+                loadingIndicatorView.stopAnimating()
+            } else {
+                loadingLabel.text = "영상 로딩 중"
+            }
+        }
+    }
+
+    private func popAfterDeletion() {
+        guard let navigationController else { return }
+        navigationController.interactivePopGestureRecognizer?.isEnabled = true
+
+        let previousViewController = navigationController.viewControllers.dropLast().last
+        navigationController.popViewController(animated: true)
+        if let previousView = previousViewController?.view {
+            ToastView.show(message: "삭제했어요", style: .success, in: previousView)
+        }
     }
 }
 
