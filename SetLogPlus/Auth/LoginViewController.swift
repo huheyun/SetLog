@@ -3,86 +3,90 @@ import UIKit
 final class LoginViewController: UIViewController {
     private let emailTextField = UITextField()
     private let passwordTextField = UITextField()
-    private let loginButton = PrimaryButton(title: "Log In")
-    private let stackView = UIStackView()
+    private let loginButton = PrimaryButton(title: "로그인")
+    private let signUpButton = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Login"
         view.backgroundColor = AppTheme.background
+        // The brand header replaces the navigation title; keep the pushed screen's back button compact.
+        navigationItem.backButtonDisplayMode = .minimal
         setupLayout()
         setupKeyboardDismissal()
+        updateLoginButtonState()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: animated)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
     private func setupLayout() {
-        let logoImageView = UIImageView(image: UIImage(named: "SetLogPlusLogo"))
-        logoImageView.contentMode = .scaleAspectFill
-        logoImageView.layer.cornerRadius = 38
-        logoImageView.clipsToBounds = true
-        logoImageView.translatesAutoresizingMaskIntoConstraints = false
+        let headerView = AuthHeaderView(
+            title: nil,
+            subtitle: "짧게 찍고, 그룹과 하루를 기록해요."
+        )
 
-        let logoContainerView = UIView()
-        logoContainerView.translatesAutoresizingMaskIntoConstraints = false
-        logoContainerView.addSubview(logoImageView)
-
-        let titleLabel = UILabel()
-        titleLabel.text = "SETLOG+"
-        titleLabel.font = .systemFont(ofSize: 34, weight: .black)
-        titleLabel.textColor = AppTheme.butter
-        titleLabel.textAlignment = .center
-
-        let subtitleLabel = UILabel()
-        subtitleLabel.text = "짧게 찍고, 그룹과 하루를 기록해요."
-        subtitleLabel.font = .preferredFont(forTextStyle: .subheadline)
-        subtitleLabel.textColor = AppTheme.secondaryText
-        subtitleLabel.textAlignment = .center
-        subtitleLabel.numberOfLines = 0
-
-        AppTheme.styleTextField(emailTextField, placeholder: "Email")
+        AppTheme.styleTextField(emailTextField, placeholder: "name@example.com")
         emailTextField.keyboardType = .emailAddress
         emailTextField.textContentType = .username
         emailTextField.autocapitalizationType = .none
         emailTextField.returnKeyType = .next
         emailTextField.delegate = self
 
-        AppTheme.styleTextField(passwordTextField, placeholder: "Password")
+        AppTheme.styleTextField(passwordTextField, placeholder: "비밀번호를 입력하세요")
         passwordTextField.isSecureTextEntry = true
         passwordTextField.textContentType = .password
-        passwordTextField.returnKeyType = .done
+        passwordTextField.returnKeyType = .go
         passwordTextField.delegate = self
+        passwordTextField.installPasswordVisibilityToggle()
+
+        [emailTextField, passwordTextField].forEach {
+            $0.addTarget(self, action: #selector(textFieldDidChange), for: .editingChanged)
+        }
+
+        let emailField = AuthFormField(label: "이메일", textField: emailTextField)
+        let passwordField = AuthFormField(label: "비밀번호", textField: passwordTextField)
+
+        let formStack = UIStackView(arrangedSubviews: [emailField, passwordField])
+        formStack.axis = .vertical
+        formStack.spacing = AppTheme.Spacing.l
 
         loginButton.addTarget(self, action: #selector(loginTapped), for: .touchUpInside)
 
-        let signUpButton = UIButton(type: .system)
-        signUpButton.setTitle("Create a new account", for: .normal)
-        signUpButton.tintColor = AppTheme.lavender
+        configureSignUpButton()
+
+        let contentStack = UIStackView(arrangedSubviews: [headerView, formStack, loginButton, signUpButton])
+        contentStack.axis = .vertical
+        contentStack.spacing = AppTheme.Spacing.xl
+        contentStack.setCustomSpacing(AppTheme.Spacing.xxl + AppTheme.Spacing.s, after: headerView)
+        contentStack.setCustomSpacing(AppTheme.Spacing.m, after: loginButton)
+
+        AuthFormLayout.install(contentStack, in: self)
+    }
+
+    private func configureSignUpButton() {
+        var configuration = UIButton.Configuration.plain()
+        var attributed = AttributedString("아직 계정이 없나요? ")
+        attributed.font = .preferredFont(forTextStyle: .subheadline)
+        attributed.foregroundColor = AppTheme.secondaryText
+        var action = AttributedString("회원가입")
+        action.font = AppTheme.roundedFont(.subheadline, weight: .semibold)
+        action.foregroundColor = AppTheme.neonPink
+        attributed.append(action)
+        configuration.attributedTitle = attributed
+        configuration.titleLineBreakMode = .byWordWrapping
+        signUpButton.configuration = configuration
+        signUpButton.titleLabel?.adjustsFontForContentSizeCategory = true
+        signUpButton.accessibilityLabel = "회원가입"
+        signUpButton.accessibilityHint = "새 계정을 만듭니다"
+        signUpButton.enablePressAnimation(scale: 0.97)
         signUpButton.addTarget(self, action: #selector(signUpTapped), for: .touchUpInside)
-
-        [
-            logoContainerView,
-            titleLabel,
-            subtitleLabel,
-            emailTextField,
-            passwordTextField,
-            loginButton,
-            signUpButton
-        ].forEach { stackView.addArrangedSubview($0) }
-        stackView.axis = .vertical
-        stackView.spacing = 14
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-
-        view.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
-            stackView.centerYAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -160),
-            logoContainerView.heightAnchor.constraint(equalToConstant: 76),
-            logoImageView.centerXAnchor.constraint(equalTo: logoContainerView.centerXAnchor),
-            logoImageView.centerYAnchor.constraint(equalTo: logoContainerView.centerYAnchor),
-            logoImageView.widthAnchor.constraint(equalToConstant: 76),
-            logoImageView.heightAnchor.constraint(equalToConstant: 76)
-        ])
     }
 
     private func setupKeyboardDismissal() {
@@ -95,13 +99,37 @@ final class LoginViewController: UIViewController {
         view.endEditing(true)
     }
 
+    // MARK: - Validation
+
+    private var trimmedEmail: String {
+        emailTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var isFormValid: Bool {
+        let email = trimmedEmail
+        return !email.isEmpty && email.contains("@") && !(passwordTextField.text ?? "").isEmpty
+    }
+
+    @objc private func textFieldDidChange() {
+        updateLoginButtonState()
+    }
+
+    private func updateLoginButtonState() {
+        guard !loginButton.isLoading else { return }
+        loginButton.isEnabled = isFormValid
+    }
+
+    // MARK: - Actions
+
     @objc private func loginTapped() {
         view.endEditing(true)
+        guard !loginButton.isLoading else { return }
 
         guard let email = emailTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines),
               let password = passwordTextField.text,
               !email.isEmpty,
               !password.isEmpty else {
+            Haptics.error()
             showAlert(title: "로그인 실패", message: "이메일과 비밀번호를 입력해주세요.")
             return
         }
@@ -117,6 +145,7 @@ final class LoginViewController: UIViewController {
                 case .success:
                     AppRouter.showLog(from: self)
                 case .failure(let error):
+                    Haptics.error()
                     self.showAlert(title: "로그인 실패", message: error.localizedDescription)
                 }
             }
@@ -128,8 +157,12 @@ final class LoginViewController: UIViewController {
     }
 
     private func setLoading(_ isLoading: Bool) {
-        loginButton.isEnabled = !isLoading
-        loginButton.configuration?.showsActivityIndicator = isLoading
+        loginButton.isLoading = isLoading
+        [emailTextField, passwordTextField].forEach { $0.isEnabled = !isLoading }
+        signUpButton.isEnabled = !isLoading
+        if !isLoading {
+            updateLoginButtonState()
+        }
     }
 }
 
@@ -137,9 +170,11 @@ extension LoginViewController: UITextFieldDelegate {
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         if textField === emailTextField {
             passwordTextField.becomeFirstResponder()
-        } else {
+        } else if isFormValid {
             textField.resignFirstResponder()
             loginTapped()
+        } else if trimmedEmail.isEmpty || !trimmedEmail.contains("@") {
+            emailTextField.becomeFirstResponder()
         }
 
         return true

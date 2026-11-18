@@ -8,16 +8,20 @@ final class VideoDetailViewController: UIViewController {
     private let player: AVPlayer
     private let reactionRepository = ReactionRepository()
     private let playerViewController = AVPlayerViewController()
-    private let soundButton = IconCircleButton(systemName: "speaker.wave.2.fill")
-    private let reactionButton = IconCircleButton(systemName: "heart")
+    private let soundButton = IconCircleButton(systemName: "speaker.wave.2.fill", accessibilityLabel: "소리 끄기")
+    private let reactionButton = IconCircleButton(systemName: "heart", accessibilityLabel: "반응 남기기")
+    private let reactionSummaryPill = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let reactionSummaryLabel = UILabel()
-    private let loadingContainerView = UIView()
-    private let loadingIndicatorView = UIActivityIndicatorView(style: .large)
+    private let loadingContainerView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let loadingIndicatorView = UIActivityIndicatorView(style: .medium)
     private let loadingLabel = UILabel()
+    private let playbackIconContainer = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let playbackIconView = UIImageView()
     private var playerStatusObservation: NSKeyValueObservation?
     private var playbackEndObserver: NSObjectProtocol?
     private var reactions: [PostReaction] = []
     private var isMuted = false
+    private var isPausedByUser = false
 
     init(post: Post, member: GroupMember, hourDate: Date) {
         self.post = post
@@ -42,10 +46,14 @@ final class VideoDetailViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        .lightContent
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = ""
-        view.backgroundColor = AppTheme.background
+        view.backgroundColor = .black
         navigationController?.setNavigationBarHidden(true, animated: false)
         setupLayout()
         observePlayerStatus()
@@ -53,9 +61,17 @@ final class VideoDetailViewController: UIViewController {
         fetchReactions()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Re-hide after a cancelled interactive pop, which restores the bar in `viewWillDisappear`.
+        navigationController?.setNavigationBarHidden(true, animated: animated)
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        player.play()
+        if !isPausedByUser {
+            player.play()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -64,84 +80,168 @@ final class VideoDetailViewController: UIViewController {
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
+    // MARK: - Layout
+
     private func setupLayout() {
         let videoContainerView = UIView()
-        videoContainerView.backgroundColor = AppTheme.cardMuted
+        videoContainerView.backgroundColor = .black
         videoContainerView.translatesAutoresizingMaskIntoConstraints = false
 
         player.isMuted = isMuted
         playerViewController.player = player
         playerViewController.showsPlaybackControls = false
+        playerViewController.videoGravity = .resizeAspectFill
+        playerViewController.view.backgroundColor = .black
         addChild(playerViewController)
         videoContainerView.addSubview(playerViewController.view)
         playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
         playerViewController.didMove(toParent: self)
 
-        let closeButton = IconCircleButton(systemName: "xmark")
-        closeButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.42)
+        let topGradientView = VideoGradientView(direction: .topDown, maxAlpha: 0.6)
+        let bottomGradientView = VideoGradientView(direction: .bottomUp, maxAlpha: 0.75)
+
+        // Top bar: back button + author.
+        let closeButton = IconCircleButton(systemName: "chevron.backward", accessibilityLabel: "뒤로")
+        closeButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+
+        let avatarLabel = AppTheme.makeAvatarLabel(
+            text: String(member.displayName.prefix(1)),
+            size: 36,
+            fontSize: 15,
+            color: AppTheme.avatarColor(for: member.uid)
+        )
+        avatarLabel.layer.borderWidth = 1.5
+        avatarLabel.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
 
         let nameLabel = UILabel()
         nameLabel.text = member.displayName
-        nameLabel.font = .systemFont(ofSize: 18, weight: .black)
+        nameLabel.font = AppTheme.roundedFont(.headline, weight: .bold)
+        nameLabel.adjustsFontForContentSizeCategory = true
         nameLabel.textColor = .white
-        AppTheme.applyTextShadow(to: nameLabel, opacity: 0.6, radius: 5)
+        nameLabel.lineBreakMode = .byTruncatingTail
 
         let timeLabel = UILabel()
-        timeLabel.text = HourSlot.displayText(date: hourDate)
-        timeLabel.font = .systemFont(ofSize: 34, weight: .black)
-        timeLabel.textColor = .white
-        AppTheme.applyTextShadow(to: timeLabel, opacity: 0.6, radius: 5)
+        timeLabel.text = "\(HourSlot.displayText(date: hourDate)) 로그"
+        timeLabel.font = AppTheme.roundedFont(.caption1, weight: .semibold)
+        timeLabel.adjustsFontForContentSizeCategory = true
+        timeLabel.textColor = UIColor.white.withAlphaComponent(0.75)
 
-        let textStackView = UIStackView(arrangedSubviews: [nameLabel, timeLabel])
-        textStackView.axis = .vertical
-        textStackView.spacing = 6
-        textStackView.translatesAutoresizingMaskIntoConstraints = false
+        let authorTextStackView = UIStackView(arrangedSubviews: [nameLabel, timeLabel])
+        authorTextStackView.axis = .vertical
+        authorTextStackView.spacing = 1
 
-        soundButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.42)
+        let authorStackView = UIStackView(arrangedSubviews: [avatarLabel, authorTextStackView])
+        authorStackView.axis = .horizontal
+        authorStackView.alignment = .center
+        authorStackView.spacing = AppTheme.Spacing.s + 2
+        authorStackView.isAccessibilityElement = true
+        authorStackView.accessibilityTraits = .header
+        authorStackView.accessibilityLabel = "\(member.displayName), \(HourSlot.displayText(date: hourDate)) 로그"
+        authorStackView.translatesAutoresizingMaskIntoConstraints = false
+
+        // Bottom bar: caption + reaction summary, reaction & sound buttons.
+        let captionLabel = UILabel()
+        let caption = post.caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        captionLabel.text = caption
+        captionLabel.isHidden = caption.isEmpty
+        captionLabel.font = AppTheme.roundedFont(.body, weight: .semibold)
+        captionLabel.adjustsFontForContentSizeCategory = true
+        captionLabel.textColor = .white
+        captionLabel.numberOfLines = 3
+
+        reactionSummaryLabel.font = AppTheme.roundedFont(.subheadline, weight: .bold)
+        reactionSummaryLabel.adjustsFontForContentSizeCategory = true
+        reactionSummaryLabel.textColor = .white
+        reactionSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        reactionSummaryPill.layer.cornerRadius = 16
+        reactionSummaryPill.layer.cornerCurve = .continuous
+        reactionSummaryPill.clipsToBounds = true
+        reactionSummaryPill.isHidden = true
+        reactionSummaryPill.contentView.addSubview(reactionSummaryLabel)
+
+        let leadingStackView = UIStackView(arrangedSubviews: [captionLabel, reactionSummaryPill])
+        leadingStackView.axis = .vertical
+        leadingStackView.alignment = .leading
+        leadingStackView.spacing = AppTheme.Spacing.s
+        leadingStackView.translatesAutoresizingMaskIntoConstraints = false
+
+        soundButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
         soundButton.addTarget(self, action: #selector(soundTapped), for: .touchUpInside)
         updateSoundButton()
 
-        reactionButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.42)
+        reactionButton.configuration?.baseBackgroundColor = UIColor.black.withAlphaComponent(0.35)
         reactionButton.addTarget(self, action: #selector(reactionTapped), for: .touchUpInside)
         updateReactionButton()
 
-        reactionSummaryLabel.font = .systemFont(ofSize: 15, weight: .black)
-        reactionSummaryLabel.textColor = .white
-        reactionSummaryLabel.textAlignment = .right
-        AppTheme.applyTextShadow(to: reactionSummaryLabel, opacity: 0.6)
-        reactionSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        let buttonsStackView = UIStackView(arrangedSubviews: [reactionButton, soundButton])
+        buttonsStackView.axis = .vertical
+        buttonsStackView.spacing = AppTheme.Spacing.m
+        buttonsStackView.translatesAutoresizingMaskIntoConstraints = false
 
-        loadingContainerView.backgroundColor = UIColor.black.withAlphaComponent(0.42)
-        loadingContainerView.layer.cornerRadius = 16
+        // Loading state.
+        loadingContainerView.layer.cornerRadius = 20
+        loadingContainerView.layer.cornerCurve = .continuous
+        loadingContainerView.clipsToBounds = true
         loadingContainerView.translatesAutoresizingMaskIntoConstraints = false
 
         loadingIndicatorView.color = .white
         loadingIndicatorView.startAnimating()
 
         loadingLabel.text = "영상 로딩 중"
-        loadingLabel.font = .systemFont(ofSize: 14, weight: .bold)
-        loadingLabel.textColor = .white
+        loadingLabel.font = AppTheme.roundedFont(.footnote, weight: .semibold)
+        loadingLabel.adjustsFontForContentSizeCategory = true
+        loadingLabel.textColor = UIColor.white.withAlphaComponent(0.85)
+        loadingLabel.textAlignment = .center
+        loadingLabel.numberOfLines = 0
 
         let loadingStackView = UIStackView(arrangedSubviews: [loadingIndicatorView, loadingLabel])
         loadingStackView.axis = .vertical
         loadingStackView.alignment = .center
         loadingStackView.spacing = 10
         loadingStackView.translatesAutoresizingMaskIntoConstraints = false
-        loadingContainerView.addSubview(loadingStackView)
+        loadingContainerView.contentView.addSubview(loadingStackView)
 
-        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(closeTapped))
+        // Play/pause feedback.
+        playbackIconContainer.layer.cornerRadius = 36
+        playbackIconContainer.clipsToBounds = true
+        playbackIconContainer.alpha = 0
+        playbackIconContainer.isUserInteractionEnabled = false
+        playbackIconContainer.translatesAutoresizingMaskIntoConstraints = false
+        playbackIconView.tintColor = .white
+        playbackIconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 28, weight: .bold)
+        playbackIconView.translatesAutoresizingMaskIntoConstraints = false
+        playbackIconContainer.contentView.addSubview(playbackIconView)
+
+        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
         tapRecognizer.cancelsTouchesInView = false
         tapRecognizer.delegate = self
         view.addGestureRecognizer(tapRecognizer)
 
+        let swipeDownRecognizer = UISwipeGestureRecognizer(target: self, action: #selector(closeTapped))
+        swipeDownRecognizer.direction = .down
+        swipeDownRecognizer.delegate = self
+        view.addGestureRecognizer(swipeDownRecognizer)
+
+        authorStackView.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "재생/일시정지") { [weak self] _ in
+                self?.togglePlayback()
+                return true
+            }
+        ]
+
         view.addSubview(videoContainerView)
+        view.addSubview(topGradientView)
+        view.addSubview(bottomGradientView)
         view.addSubview(closeButton)
-        view.addSubview(textStackView)
-        view.addSubview(soundButton)
-        view.addSubview(reactionButton)
-        view.addSubview(reactionSummaryLabel)
+        view.addSubview(authorStackView)
+        view.addSubview(leadingStackView)
+        view.addSubview(buttonsStackView)
+        view.addSubview(playbackIconContainer)
         view.addSubview(loadingContainerView)
+
+        let margin = AppTheme.Spacing.l
 
         NSLayoutConstraint.activate([
             videoContainerView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -154,31 +254,57 @@ final class VideoDetailViewController: UIViewController {
             playerViewController.view.trailingAnchor.constraint(equalTo: videoContainerView.trailingAnchor),
             playerViewController.view.bottomAnchor.constraint(equalTo: videoContainerView.bottomAnchor),
 
-            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
-            closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            topGradientView.topAnchor.constraint(equalTo: view.topAnchor),
+            topGradientView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topGradientView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topGradientView.bottomAnchor.constraint(equalTo: closeButton.bottomAnchor, constant: 56),
 
-            textStackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 22),
-            textStackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -34),
-            textStackView.trailingAnchor.constraint(lessThanOrEqualTo: reactionSummaryLabel.leadingAnchor, constant: -18),
+            bottomGradientView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomGradientView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomGradientView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bottomGradientView.topAnchor.constraint(lessThanOrEqualTo: buttonsStackView.topAnchor, constant: -56),
+            bottomGradientView.topAnchor.constraint(lessThanOrEqualTo: leadingStackView.topAnchor, constant: -56),
 
-            soundButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -22),
-            soundButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -40),
+            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: AppTheme.Spacing.s),
+            closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: margin),
 
-            reactionButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -22),
-            reactionButton.bottomAnchor.constraint(equalTo: soundButton.topAnchor, constant: -14),
+            authorStackView.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: AppTheme.Spacing.m),
+            authorStackView.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
+            authorStackView.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -margin),
 
-            reactionSummaryLabel.trailingAnchor.constraint(equalTo: reactionButton.leadingAnchor, constant: -10),
-            reactionSummaryLabel.centerYAnchor.constraint(equalTo: reactionButton.centerYAnchor),
-            reactionSummaryLabel.leadingAnchor.constraint(greaterThanOrEqualTo: textStackView.trailingAnchor, constant: 10),
+            buttonsStackView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -margin),
+            buttonsStackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -margin),
+
+            leadingStackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: margin + 4),
+            leadingStackView.bottomAnchor.constraint(equalTo: buttonsStackView.bottomAnchor),
+            leadingStackView.trailingAnchor.constraint(lessThanOrEqualTo: buttonsStackView.leadingAnchor, constant: -margin),
+
+            reactionSummaryLabel.topAnchor.constraint(equalTo: reactionSummaryPill.contentView.topAnchor, constant: 7),
+            reactionSummaryLabel.bottomAnchor.constraint(equalTo: reactionSummaryPill.contentView.bottomAnchor, constant: -7),
+            reactionSummaryLabel.leadingAnchor.constraint(equalTo: reactionSummaryPill.contentView.leadingAnchor, constant: 12),
+            reactionSummaryLabel.trailingAnchor.constraint(equalTo: reactionSummaryPill.contentView.trailingAnchor, constant: -12),
+
+            playbackIconContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            playbackIconContainer.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            playbackIconContainer.widthAnchor.constraint(equalToConstant: 72),
+            playbackIconContainer.heightAnchor.constraint(equalToConstant: 72),
+            playbackIconView.centerXAnchor.constraint(equalTo: playbackIconContainer.contentView.centerXAnchor),
+            playbackIconView.centerYAnchor.constraint(equalTo: playbackIconContainer.contentView.centerYAnchor),
 
             loadingContainerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingContainerView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            loadingContainerView.widthAnchor.constraint(equalToConstant: 132),
-            loadingContainerView.heightAnchor.constraint(equalToConstant: 112),
+            loadingContainerView.widthAnchor.constraint(greaterThanOrEqualToConstant: 132),
+            loadingContainerView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -64),
 
-            loadingStackView.centerXAnchor.constraint(equalTo: loadingContainerView.centerXAnchor),
-            loadingStackView.centerYAnchor.constraint(equalTo: loadingContainerView.centerYAnchor)
+            loadingStackView.topAnchor.constraint(equalTo: loadingContainerView.contentView.topAnchor, constant: 22),
+            loadingStackView.bottomAnchor.constraint(equalTo: loadingContainerView.contentView.bottomAnchor, constant: -22),
+            loadingStackView.leadingAnchor.constraint(equalTo: loadingContainerView.contentView.leadingAnchor, constant: 20),
+            loadingStackView.trailingAnchor.constraint(equalTo: loadingContainerView.contentView.trailingAnchor, constant: -20)
         ])
+
+        let preferredBottomGradientHeight = bottomGradientView.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.36)
+        preferredBottomGradientHeight.priority = .defaultLow
+        preferredBottomGradientHeight.isActive = true
     }
 
     private func observePlayerStatus() {
@@ -231,17 +357,53 @@ final class VideoDetailViewController: UIViewController {
         updateSoundButton()
     }
 
+    @objc private func videoTapped() {
+        togglePlayback()
+    }
+
+    private func togglePlayback() {
+        if player.timeControlStatus == .paused {
+            isPausedByUser = false
+            player.play()
+            flashPlaybackIcon(systemName: "play.fill")
+        } else {
+            isPausedByUser = true
+            player.pause()
+            flashPlaybackIcon(systemName: "pause.fill")
+        }
+        Haptics.selection()
+    }
+
+    private func flashPlaybackIcon(systemName: String) {
+        playbackIconView.image = UIImage(systemName: systemName)
+        playbackIconContainer.layer.removeAllAnimations()
+        playbackIconContainer.alpha = 0
+        playbackIconContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
+            self.playbackIconContainer.alpha = 1
+            self.playbackIconContainer.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.3, delay: 0.45, options: [.curveEaseIn, .beginFromCurrentState]) {
+                self.playbackIconContainer.alpha = 0
+                self.playbackIconContainer.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+            }
+        }
+    }
+
     @objc private func reactionTapped() {
         presentReactionPicker(currentEmoji: myReaction()?.emoji, from: reactionButton) { [weak self] emoji in
+            Haptics.selection()
             self?.toggleReaction(emoji: emoji)
         }
     }
 
     private func updateSoundButton() {
-        var configuration = soundButton.configuration
-        configuration?.image = UIImage(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-        configuration?.baseForegroundColor = isMuted ? AppTheme.secondaryText : .white
-        soundButton.configuration = configuration
+        soundButton.setSymbol(
+            isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+            tintColor: isMuted ? AppTheme.secondaryText : .white
+        )
+        soundButton.accessibilityLabel = isMuted ? "소리 켜기" : "소리 끄기"
     }
 
     private func fetchReactions() {
@@ -253,7 +415,7 @@ final class VideoDetailViewController: UIViewController {
                 self.reactions = reactionsByPostID[self.post.id] ?? []
                 self.updateReactionButton()
             case .failure(let error):
-                ToastView.show(message: "반응을 불러오지 못했어요: \(error.localizedDescription)", in: self.view)
+                ToastView.show(message: "반응을 불러오지 못했어요: \(error.localizedDescription)", style: .error, in: self.view)
             }
         }
     }
@@ -268,9 +430,10 @@ final class VideoDetailViewController: UIViewController {
 
             switch result {
             case .success:
+                Haptics.success()
                 self.fetchReactions()
             case .failure(let error):
-                ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", in: self.view)
+                ToastView.show(message: "반응 저장 실패: \(error.localizedDescription)", style: .error, in: self.view)
             }
         }
     }
@@ -280,13 +443,20 @@ final class VideoDetailViewController: UIViewController {
     }
 
     private func updateReactionButton() {
-        var configuration = reactionButton.configuration
         let emoji = myReaction()?.emoji
-        configuration?.image = emoji == nil ? UIImage(systemName: "heart") : nil
-        configuration?.title = emoji
-        configuration?.baseForegroundColor = .white
-        reactionButton.configuration = configuration
-        reactionSummaryLabel.text = reactionSummaryText()
+        if let emoji {
+            reactionButton.setSymbol("heart.fill", tintColor: AppTheme.neonPink)
+            reactionButton.accessibilityLabel = "내 반응 \(emoji), 변경"
+        } else {
+            reactionButton.setSymbol("heart", tintColor: .white)
+            reactionButton.accessibilityLabel = "반응 남기기"
+        }
+
+        let summary = reactionSummaryText()
+        reactionSummaryLabel.text = summary
+        reactionSummaryPill.accessibilityLabel = summary.isEmpty ? nil : "반응 \(summary)"
+        reactionSummaryPill.isAccessibilityElement = !summary.isEmpty
+        reactionSummaryPill.isHidden = summary.isEmpty
     }
 
     private func reactionSummaryText() -> String {

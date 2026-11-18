@@ -4,7 +4,9 @@ final class GroupSettingsViewController: UIViewController {
     private let groupRepository = GroupRepository()
     private let group: Group
     private var members: [GroupMember] = []
+    private var membersLoadError: Error?
     private let contentStackView = UIStackView()
+    private weak var actionButton: PrimaryButton?
 
     init(group: Group) {
         self.group = group
@@ -24,33 +26,40 @@ final class GroupSettingsViewController: UIViewController {
         fetchMembers()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+    }
+
     private func setupLayout() {
         let scrollView = UIScrollView()
         scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         contentStackView.axis = .vertical
-        contentStackView.spacing = 14
+        contentStackView.spacing = AppTheme.Spacing.xl
         contentStackView.translatesAutoresizingMaskIntoConstraints = false
 
         view.addSubview(scrollView)
         scrollView.addSubview(contentStackView)
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
-            scrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            scrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: AppTheme.Spacing.l),
+            scrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -AppTheme.Spacing.l),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            contentStackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            contentStackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: AppTheme.Spacing.m),
             contentStackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
             contentStackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            contentStackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            contentStackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -AppTheme.Spacing.xxl),
             contentStackView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor)
         ])
     }
 
     private func fetchMembers() {
+        membersLoadError = nil
         renderLoadingState()
 
         groupRepository.fetchMembers(groupID: group.id) { [weak self] result in
@@ -60,7 +69,7 @@ final class GroupSettingsViewController: UIViewController {
             case .success(let members):
                 self.members = members.sortedForDisplay()
             case .failure(let error):
-                self.showAlert(title: "멤버 조회 실패", message: error.localizedDescription)
+                self.membersLoadError = error
             }
             self.renderSettings()
         }
@@ -68,159 +77,257 @@ final class GroupSettingsViewController: UIViewController {
 
     private func renderLoadingState() {
         contentStackView.replaceArrangedSubviews(with: [
-            InfoCardView(title: group.name, message: "멤버를 불러오는 중입니다.", minimumHeight: 150)
+            InfoCardView(title: group.name, message: "멤버를 불러오는 중이에요.", minimumHeight: 180, isLoading: true)
         ])
     }
 
     private func renderSettings() {
         contentStackView.replaceArrangedSubviews(with: [
             makeGroupSummaryCard(),
-            makeMembersCard(),
-            makeActionButton()
+            FeedGroupComponents.makeSection(title: "초대", content: makeInviteCard()),
+            FeedGroupComponents.makeSection(title: membersSectionTitle, content: makeMembersContent()),
+            makeActionSection()
         ])
     }
+
+    private var membersSectionTitle: String {
+        membersLoadError == nil ? "멤버 \(members.count)" : "멤버"
+    }
+
+    // MARK: - Summary
 
     private func makeGroupSummaryCard() -> UIView {
         let card = UIView()
-        AppTheme.roundCard(card, radius: 18)
+        AppTheme.roundCard(card, radius: AppTheme.Radius.large)
+
+        let tileView = FeedGroupComponents.makeGroupTile(name: group.name, id: group.id, size: 56)
 
         let titleLabel = UILabel()
         titleLabel.text = group.name
-        titleLabel.font = .preferredFont(forTextStyle: .title2)
+        titleLabel.font = AppTheme.roundedFont(.title2, weight: .bold)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = AppTheme.text
+        titleLabel.numberOfLines = 2
 
-        let inviteLabel = UILabel()
-        inviteLabel.text = "초대 코드 \(group.inviteCode)"
-        inviteLabel.font = .monospacedSystemFont(ofSize: 15, weight: .semibold)
-        inviteLabel.textColor = AppTheme.neonPink
+        let memberCount = membersLoadError == nil ? members.count : group.memberIDs.count
+        let memberLabel = UILabel()
+        memberLabel.text = "멤버 \(memberCount)명"
+        memberLabel.font = .preferredFont(forTextStyle: .subheadline)
+        memberLabel.adjustsFontForContentSizeCategory = true
+        memberLabel.textColor = AppTheme.secondaryText
 
-        let copyButton = IconCircleButton(systemName: "doc.on.doc")
-        copyButton.configuration?.baseForegroundColor = AppTheme.mint
-        copyButton.addTarget(self, action: #selector(copyInviteCodeTapped), for: .touchUpInside)
+        let rolePill = FeedGroupComponents.makePill(
+            text: isCurrentUserOwner ? "그룹장" : "그룹원",
+            color: isCurrentUserOwner ? AppTheme.neonPink : AppTheme.secondaryText
+        )
+        rolePill.accessibilityLabel = isCurrentUserOwner ? "내 역할: 그룹장" : "내 역할: 그룹원"
 
-        let inviteStackView = UIStackView(arrangedSubviews: [inviteLabel, copyButton])
-        inviteStackView.axis = .horizontal
-        inviteStackView.alignment = .center
-        inviteStackView.spacing = 10
+        let metaStack = UIStackView(arrangedSubviews: [memberLabel, rolePill])
+        metaStack.axis = .horizontal
+        metaStack.alignment = .center
+        metaStack.spacing = AppTheme.Spacing.s
 
-        let roleLabel = UILabel()
-        roleLabel.text = isCurrentUserOwner ? "내 역할: 그룹장" : "내 역할: 그룹원"
-        roleLabel.font = .preferredFont(forTextStyle: .subheadline)
-        roleLabel.textColor = AppTheme.secondaryText
+        let textStack = UIStackView(arrangedSubviews: [titleLabel, metaStack])
+        textStack.axis = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 6
 
-        let stackView = UIStackView(arrangedSubviews: [titleLabel, inviteStackView, roleLabel])
-        stackView.axis = .vertical
-        stackView.spacing = 8
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+        let rowStack = UIStackView(arrangedSubviews: [tileView, textStack])
+        rowStack.axis = .horizontal
+        rowStack.alignment = .center
+        rowStack.spacing = AppTheme.Spacing.l
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
 
-        card.addSubview(stackView)
+        card.addSubview(rowStack)
 
         NSLayoutConstraint.activate([
-            card.heightAnchor.constraint(greaterThanOrEqualToConstant: 118),
-            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
-            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
-            stackView.centerYAnchor.constraint(equalTo: card.centerYAnchor)
+            rowStack.topAnchor.constraint(equalTo: card.topAnchor, constant: AppTheme.Spacing.xl - 4),
+            rowStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -(AppTheme.Spacing.xl - 4)),
+            rowStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: AppTheme.Spacing.screen),
+            rowStack.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -AppTheme.Spacing.screen)
         ])
 
         return card
     }
 
-    private func makeMembersCard() -> UIView {
-        let card = UIView()
-        AppTheme.roundCard(card, radius: 18)
+    // MARK: - Invite
 
-        let titleLabel = UILabel()
-        titleLabel.text = "멤버 \(members.count)명"
-        titleLabel.font = .preferredFont(forTextStyle: .headline)
-        titleLabel.textColor = AppTheme.text
+    private func makeInviteCard() -> UIView {
+        let captionLabel = UILabel()
+        captionLabel.text = "초대 코드"
+        captionLabel.font = .preferredFont(forTextStyle: .caption1)
+        captionLabel.adjustsFontForContentSizeCategory = true
+        captionLabel.textColor = AppTheme.secondaryText
 
-        let stackView = UIStackView(arrangedSubviews: [titleLabel])
+        let codeLabel = UILabel()
+        codeLabel.text = group.inviteCode
+        codeLabel.font = UIFontMetrics(forTextStyle: .title2).scaledFont(for: .monospacedSystemFont(ofSize: 22, weight: .bold))
+        codeLabel.adjustsFontForContentSizeCategory = true
+        codeLabel.textColor = AppTheme.text
+        codeLabel.adjustsFontSizeToFitWidth = true
+        codeLabel.minimumScaleFactor = 0.7
+
+        let codeStack = UIStackView(arrangedSubviews: [captionLabel, codeLabel])
+        codeStack.axis = .vertical
+        codeStack.spacing = 2
+        codeStack.isAccessibilityElement = true
+        codeStack.accessibilityLabel = "초대 코드 \(group.inviteCode.map(String.init).joined(separator: " "))"
+
+        let copyButton = IconCircleButton(systemName: "doc.on.doc", tintColor: AppTheme.text, accessibilityLabel: "초대 코드 복사")
+        copyButton.addTarget(self, action: #selector(copyInviteCodeTapped), for: .touchUpInside)
+
+        let shareButton = IconCircleButton(systemName: "square.and.arrow.up", tintColor: AppTheme.neonPink, accessibilityLabel: "초대 코드 공유")
+        shareButton.addAction(UIAction { [weak self, weak shareButton] _ in
+            self?.shareInviteCode(from: shareButton)
+        }, for: .touchUpInside)
+
+        let buttonStack = UIStackView(arrangedSubviews: [copyButton, shareButton])
+        buttonStack.axis = .horizontal
+        buttonStack.spacing = AppTheme.Spacing.s
+        buttonStack.setContentHuggingPriority(.required, for: .horizontal)
+        buttonStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let rowStack = UIStackView(arrangedSubviews: [codeStack, buttonStack])
+        rowStack.axis = .horizontal
+        rowStack.alignment = .center
+        rowStack.spacing = AppTheme.Spacing.m
+
+        let hintLabel = UILabel()
+        hintLabel.text = "친구에게 코드를 보내면 + 버튼의 '초대 코드로 참여'로 들어올 수 있어요."
+        hintLabel.font = .preferredFont(forTextStyle: .footnote)
+        hintLabel.adjustsFontForContentSizeCategory = true
+        hintLabel.textColor = AppTheme.tertiaryText
+        hintLabel.numberOfLines = 0
+
+        let stackView = UIStackView(arrangedSubviews: [rowStack, hintLabel])
         stackView.axis = .vertical
-        stackView.spacing = 12
+        stackView.spacing = AppTheme.Spacing.m
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
-        members.forEach { member in
-            stackView.addArrangedSubview(makeMemberRow(member))
-        }
-
+        let card = UIView()
+        AppTheme.roundCard(card, radius: AppTheme.Radius.medium)
         card.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
-            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
-            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
-            stackView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18)
+            stackView.topAnchor.constraint(equalTo: card.topAnchor, constant: AppTheme.Spacing.l),
+            stackView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -AppTheme.Spacing.l),
+            stackView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: AppTheme.Spacing.l),
+            stackView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -AppTheme.Spacing.l)
         ])
 
         return card
+    }
+
+    // MARK: - Members
+
+    private func makeMembersContent() -> UIView {
+        if membersLoadError != nil {
+            return InfoCardView(
+                title: "멤버를 불러오지 못했어요",
+                message: "네트워크 상태를 확인하고 다시 시도해주세요.",
+                systemImageName: "wifi.exclamationmark",
+                minimumHeight: 200,
+                actionTitle: "다시 시도",
+                action: { [weak self] in self?.fetchMembers() }
+            )
+        }
+
+        if members.isEmpty {
+            return InfoCardView(
+                title: "멤버가 없어요",
+                message: "초대 코드를 공유해 친구를 불러보세요.",
+                systemImageName: "person.2",
+                minimumHeight: 160
+            )
+        }
+
+        return FeedGroupComponents.makeGroupedCard(rows: members.map(makeMemberRow))
     }
 
     private func makeMemberRow(_ member: GroupMember) -> UIView {
-        let containerView = UIView()
-        containerView.backgroundColor = UIColor.white.withAlphaComponent(0.035)
-        containerView.layer.cornerRadius = 14
+        let row = UIView()
 
+        let isMe = member.uid == AuthService.shared.currentUserID
         let avatarLabel = AppTheme.makeAvatarLabel(
-            text: member.isOwner ? "★" : String(member.displayName.prefix(1)),
-            size: 36,
-            fontSize: 15,
-            color: member.isOwner ? AppTheme.neonPink : AppTheme.purple
+            text: String(member.displayName.prefix(1)),
+            size: 40,
+            fontSize: 16,
+            color: AppTheme.avatarColor(for: member.uid)
         )
 
         let nameLabel = UILabel()
-        nameLabel.text = member.displayName
-        nameLabel.font = .systemFont(ofSize: 16, weight: .bold)
+        nameLabel.text = isMe ? "\(member.displayName) (나)" : member.displayName
+        nameLabel.font = AppTheme.roundedFont(.body, weight: .semibold)
+        nameLabel.adjustsFontForContentSizeCategory = true
         nameLabel.textColor = AppTheme.text
 
         let emailLabel = UILabel()
         emailLabel.text = member.email
         emailLabel.font = .preferredFont(forTextStyle: .caption1)
+        emailLabel.adjustsFontForContentSizeCategory = true
         emailLabel.textColor = AppTheme.secondaryText
+        emailLabel.lineBreakMode = .byTruncatingMiddle
 
         let textStackView = UIStackView(arrangedSubviews: [nameLabel, emailLabel])
         textStackView.axis = .vertical
-        textStackView.spacing = 3
-        textStackView.translatesAutoresizingMaskIntoConstraints = false
+        textStackView.spacing = 2
 
-        let roleLabel = UILabel()
-        roleLabel.text = member.isOwner ? "그룹장" : "그룹원"
-        roleLabel.font = .systemFont(ofSize: 12, weight: .bold)
-        roleLabel.textColor = member.isOwner ? AppTheme.neonPink : AppTheme.secondaryText
-        roleLabel.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        roleLabel.textAlignment = .center
-        roleLabel.layer.cornerRadius = 10
-        roleLabel.clipsToBounds = true
-        roleLabel.translatesAutoresizingMaskIntoConstraints = false
+        var arrangedSubviews: [UIView] = [avatarLabel, textStackView]
+        if member.isOwner {
+            arrangedSubviews.append(FeedGroupComponents.makePill(text: "그룹장", color: AppTheme.neonPink))
+        }
 
-        containerView.addSubview(avatarLabel)
-        containerView.addSubview(textStackView)
-        containerView.addSubview(roleLabel)
+        let rowStack = UIStackView(arrangedSubviews: arrangedSubviews)
+        rowStack.axis = .horizontal
+        rowStack.alignment = .center
+        rowStack.spacing = AppTheme.Spacing.m
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+
+        row.addSubview(rowStack)
+        row.isAccessibilityElement = true
+        row.accessibilityLabel = [
+            member.displayName,
+            isMe ? "나" : nil,
+            member.isOwner ? "그룹장" : "그룹원",
+            member.email
+        ].compactMap { $0 }.joined(separator: ", ")
 
         NSLayoutConstraint.activate([
-            containerView.heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
-
-            avatarLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 12),
-            avatarLabel.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
-
-            textStackView.leadingAnchor.constraint(equalTo: avatarLabel.trailingAnchor, constant: 12),
-            textStackView.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
-            textStackView.trailingAnchor.constraint(lessThanOrEqualTo: roleLabel.leadingAnchor, constant: -10),
-
-            roleLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -12),
-            roleLabel.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
-            roleLabel.widthAnchor.constraint(equalToConstant: 58),
-            roleLabel.heightAnchor.constraint(equalToConstant: 26)
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 64),
+            rowStack.topAnchor.constraint(greaterThanOrEqualTo: row.topAnchor, constant: AppTheme.Spacing.m),
+            rowStack.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -AppTheme.Spacing.m),
+            rowStack.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            rowStack.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: AppTheme.Spacing.l),
+            rowStack.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -AppTheme.Spacing.l)
         ])
 
-        return containerView
+        return row
     }
 
-    private func makeActionButton() -> UIButton {
-        let button = PrimaryButton(title: isCurrentUserOwner ? "그룹 삭제" : "그룹 나가기")
-        button.configuration?.baseBackgroundColor = .systemRed
+    // MARK: - Danger zone
+
+    private func makeActionSection() -> UIView {
+        let button = PrimaryButton(title: isCurrentUserOwner ? "그룹 삭제" : "그룹 나가기", style: .destructive)
         button.addTarget(self, action: #selector(groupActionTapped), for: .touchUpInside)
-        return button
+        actionButton = button
+
+        let footnoteLabel = UILabel()
+        footnoteLabel.text = isCurrentUserOwner
+            ? "그룹장이 그룹을 삭제하면 모든 멤버가 이 그룹에서 빠지게 돼요."
+            : "나가도 초대 코드로 언제든 다시 참여할 수 있어요."
+        footnoteLabel.font = .preferredFont(forTextStyle: .footnote)
+        footnoteLabel.adjustsFontForContentSizeCategory = true
+        footnoteLabel.textColor = AppTheme.tertiaryText
+        footnoteLabel.textAlignment = .center
+        footnoteLabel.numberOfLines = 0
+
+        let stackView = UIStackView(arrangedSubviews: [button, footnoteLabel])
+        stackView.axis = .vertical
+        stackView.spacing = AppTheme.Spacing.s + 2
+        return stackView
     }
+
+    // MARK: - Actions
 
     @objc private func groupActionTapped() {
         let title = isCurrentUserOwner ? "그룹을 삭제할까요?" : "그룹을 나갈까요?"
@@ -236,7 +343,18 @@ final class GroupSettingsViewController: UIViewController {
 
     @objc private func copyInviteCodeTapped() {
         UIPasteboard.general.string = group.inviteCode
-        ToastView.show(message: "초대 코드가 복사됐어요", in: view)
+        ToastView.show(message: "초대 코드를 복사했어요", style: .success, in: view)
+    }
+
+    private func shareInviteCode(from sourceView: UIView?) {
+        let text = "SetLog+에서 '\(group.name)' 그룹에 함께해요!\n초대 코드: \(group.inviteCode)"
+        let activityViewController = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let popover = activityViewController.popoverPresentationController {
+            let anchorView = sourceView ?? view
+            popover.sourceView = anchorView
+            popover.sourceRect = anchorView?.bounds ?? .zero
+        }
+        present(activityViewController, animated: true)
     }
 
     private func performGroupAction() {
@@ -245,8 +363,11 @@ final class GroupSettingsViewController: UIViewController {
             return
         }
 
+        actionButton?.isLoading = true
+
         let completion: (Result<Void, Error>) -> Void = { [weak self] result in
             guard let self else { return }
+            self.actionButton?.isLoading = false
 
             switch result {
             case .success:
